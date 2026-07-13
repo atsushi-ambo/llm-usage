@@ -58,6 +58,14 @@ class Settings(BaseSettings):
         default_factory=lambda: Path.home() / ".claude" / ".credentials.json",
         alias="CLAUDE_CREDENTIALS_PATH",
     )
+    codex_home_dir: Path = Field(
+        default_factory=lambda: Path.home() / ".codex",
+        alias="CODEX_HOME",
+    )
+    grok_home_dir: Path = Field(
+        default_factory=lambda: Path.home() / ".grok",
+        alias="GROK_HOME",
+    )
 
 
 def load_settings() -> Settings:

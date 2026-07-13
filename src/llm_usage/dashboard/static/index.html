@@ -93,6 +93,7 @@
     }
     .provider.claude::before { background: var(--claude); }
     .provider.openai::before { background: var(--openai); }
+    .provider.codex::before { background: #22c55e; }
     .provider.grok::before { background: var(--grok); }
     .provider.cursor::before { background: var(--cursor); }
     .provider.gemini::before { background: var(--gemini); }
@@ -168,6 +169,7 @@
     const COLORS = {
       claude: '#d4a27f',
       openai: '#10a37f',
+      codex: '#22c55e',
       grok: '#a78bfa',
       cursor: '#60a5fa',
       gemini: '#fbbf24',
@@ -220,7 +222,7 @@
         <div class="card"><div class="label">Combined cost</div><div class="value">${hasCost ? fmtCost(totalCost) : '—'}</div><div class="sub">where known</div></div>
         <div class="card"><div class="label">Total tokens</div><div class="value">${fmtTok(totalTok)}</div><div class="sub">${fmtNum(totalTok)} raw</div></div>
         <div class="card"><div class="label">Requests</div><div class="value">${fmtNum(totalReq)}</div><div class="sub">across providers</div></div>
-        <div class="card"><div class="label">Active sources</div><div class="value">${active}/5</div><div class="sub">configured or local</div></div>
+        <div class="card"><div class="label">Active sources</div><div class="value">${active}/${data.providers.length}</div><div class="sub">configured or local</div></div>
       `;
 
       // cost share bar

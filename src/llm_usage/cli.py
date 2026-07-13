@@ -45,7 +45,7 @@ def main(
         None,
         "--provider",
         "-p",
-        help="Filter: claude, openai, grok, cursor, gemini",
+        help="Filter: claude, openai, codex, grok, cursor, gemini",
     ),
     version: bool = typer.Option(False, "--version", help="Show version and exit"),
 ) -> None:
@@ -134,6 +134,21 @@ def status_cmd() -> None:
             "ready"
             if (settings.openai_admin_key or settings.openai_api_key)
             else "—",
+        ),
+        (
+            "Codex",
+            f"Local sessions ({settings.codex_home_dir / 'sessions'})",
+            "found" if (settings.codex_home_dir / "sessions").exists() else "missing",
+        ),
+        (
+            "Codex",
+            "ChatGPT OAuth (auth.json)",
+            "found" if (settings.codex_home_dir / "auth.json").exists() else "missing",
+        ),
+        (
+            "Grok Build",
+            f"Local logs ({settings.grok_home_dir})",
+            "found" if settings.grok_home_dir.exists() else "missing",
         ),
         (
             "Grok / xAI",
@@ -287,8 +302,14 @@ def _print_table(report: AggregateReport) -> None:
         for err in p.errors:
             console.print(f"[yellow]⚠ {p.display_name}:[/yellow] {err}")
         for note in p.notes:
-            if p.total_tokens == 0 and p.cost_usd is None:
-                console.print(f"[dim]· {p.display_name}: {note}[/dim]")
+            # Always show quota/plan notes; only show setup hints when empty
+            is_quota = any(
+                k in note.lower()
+                for k in ("quota", "plan=", "plan type", "live ", "weekly", "x premium")
+            )
+            if is_quota or (p.total_tokens == 0 and p.cost_usd is None):
+                style = "cyan" if is_quota else "dim"
+                console.print(f"[{style}]· {p.display_name}: {note}[/{style}]")
 
     if report.total_cost_usd is not None:
         console.print(
