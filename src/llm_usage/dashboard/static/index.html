@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>llm-usage</title>
+  <style>
+    :root {
+      --bg: #0b0f14;
+      --panel: #121821;
+      --border: #1e2a3a;
+      --text: #e7eef7;
+      --muted: #8b9bb0;
+      --accent: #5b9dff;
+      --green: #3dd68c;
+      --yellow: #f5c542;
+      --red: #ff6b6b;
+      --claude: #d4a27f;
+      --openai: #10a37f;
+      --grok: #a78bfa;
+      --cursor: #60a5fa;
+      --gemini: #fbbf24;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+      background: radial-gradient(1200px 600px at 10% -10%, #152238 0%, var(--bg) 55%);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 1.25rem 1.75rem;
+      border-bottom: 1px solid var(--border);
+      backdrop-filter: blur(8px);
+      position: sticky;
+      top: 0;
+      background: rgba(11, 15, 20, 0.85);
+      z-index: 10;
+    }
+    h1 {
+      font-size: 1.15rem;
+      margin: 0;
+      letter-spacing: -0.02em;
+    }
+    h1 span { color: var(--accent); }
+    .controls { display: flex; gap: .75rem; align-items: center; }
+    select, button {
+      background: var(--panel);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: .45rem .75rem;
+      font-size: .9rem;
+    }
+    button {
+      cursor: pointer;
+      background: linear-gradient(180deg, #2a6fdb, #1f5bbd);
+      border-color: #3b7de8;
+    }
+    button:hover { filter: brightness(1.08); }
+    main { padding: 1.5rem; max-width: 1200px; margin: 0 auto; }
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 1rem 1.1rem;
+    }
+    .card .label { color: var(--muted); font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; }
+    .card .value { font-size: 1.55rem; font-weight: 650; margin-top: .35rem; letter-spacing: -0.03em; }
+    .card .sub { color: var(--muted); font-size: .8rem; margin-top: .25rem; }
+    .providers {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1rem;
+    }
+    .provider { position: relative; overflow: hidden; }
+    .provider::before {
+      content: "";
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 4px;
+      background: var(--accent);
+    }
+    .provider.claude::before { background: var(--claude); }
+    .provider.openai::before { background: var(--openai); }
+    .provider.grok::before { background: var(--grok); }
+    .provider.cursor::before { background: var(--cursor); }
+    .provider.gemini::before { background: var(--gemini); }
+    .provider h2 {
+      margin: 0 0 .35rem;
+      font-size: 1rem;
+      display: flex;
+      justify-content: space-between;
+      gap: .5rem;
+      align-items: center;
+    }
+    .badge {
+      font-size: .7rem;
+      padding: .15rem .45rem;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-weight: 500;
+    }
+    .badge.api { color: var(--green); border-color: #245c42; }
+    .badge.local_logs { color: var(--accent); border-color: #2a4a74; }
+    .badge.subscription { color: #d8b4fe; border-color: #5b3a7a; }
+    .badge.unavailable { color: var(--muted); }
+    .metrics {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: .5rem .75rem;
+      margin: .85rem 0;
+      font-size: .9rem;
+    }
+    .metrics div span { display: block; color: var(--muted); font-size: .72rem; }
+    .models { margin-top: .5rem; }
+    .models table { width: 100%; border-collapse: collapse; font-size: .8rem; }
+    .models th, .models td { text-align: left; padding: .3rem 0; border-bottom: 1px solid var(--border); }
+    .models th { color: var(--muted); font-weight: 500; }
+    .models td:not(:first-child), .models th:not(:first-child) { text-align: right; }
+    .notes { color: var(--muted); font-size: .78rem; margin-top: .65rem; line-height: 1.4; }
+    .error { color: var(--yellow); }
+    .empty { color: var(--muted); text-align: center; padding: 3rem 1rem; }
+    footer { text-align: center; color: var(--muted); font-size: .75rem; padding: 2rem 1rem; }
+    .bar-wrap { margin-top: .75rem; }
+    .bar {
+      height: 8px;
+      background: #1a2433;
+      border-radius: 99px;
+      overflow: hidden;
+      display: flex;
+    }
+    .bar i { display: block; height: 100%; }
+    #status { color: var(--muted); font-size: .8rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>llm-<span>usage</span></h1>
+    <div class="controls">
+      <span id="status">Loading…</span>
+      <select id="days">
+        <option value="7">Last 7 days</option>
+        <option value="14">Last 14 days</option>
+        <option value="30" selected>Last 30 days</option>
+        <option value="90">Last 90 days</option>
+      </select>
+      <button id="refresh">Refresh</button>
+    </div>
+  </header>
+  <main>
+    <section class="summary" id="summary"></section>
+    <section class="providers" id="providers"></section>
+  </main>
+  <footer>Local-only · data stays on your machine · llm-usage</footer>
+  <script>
+    const COLORS = {
+      claude: '#d4a27f',
+      openai: '#10a37f',
+      grok: '#a78bfa',
+      cursor: '#60a5fa',
+      gemini: '#fbbf24',
+    };
+
+    const $ = (id) => document.getElementById(id);
+
+    function fmtNum(n) {
+      if (n == null || n === 0) return '—';
+      return Number(n).toLocaleString();
+    }
+    function fmtCost(n, estimated) {
+      if (n == null) return '—';
+      return (estimated ? '~$' : '$') + Number(n).toFixed(2);
+    }
+    function fmtTok(n) {
+      if (!n) return '—';
+      if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + 'M';
+      if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
+      return String(n);
+    }
+
+    async function load() {
+      const days = $('days').value;
+      $('status').textContent = 'Collecting…';
+      try {
+        const res = await fetch(`/api/usage?days=${days}`);
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        render(data);
+        $('status').textContent =
+          `${data.period_start} → ${data.period_end} · fetched ${new Date(data.generated_at).toLocaleTimeString()}`;
+      } catch (e) {
+        $('status').textContent = 'Error';
+        $('providers').innerHTML = `<div class="empty error">${e.message}</div>`;
+      }
+    }
+
+    function render(data) {
+      const totalCost = data.providers
+        .map(p => p.cost_usd)
+        .filter(v => v != null)
+        .reduce((a, b) => a + b, 0);
+      const hasCost = data.providers.some(p => p.cost_usd != null);
+      const totalTok = data.providers.reduce((a, p) => a + (p.input_tokens||0) + (p.output_tokens||0) + (p.cache_read_tokens||0) + (p.cache_write_tokens||0), 0);
+      const totalReq = data.providers.reduce((a, p) => a + (p.requests||0), 0);
+      const active = data.providers.filter(p => p.source !== 'unavailable').length;
+
+      $('summary').innerHTML = `
+        <div class="card"><div class="label">Combined cost</div><div class="value">${hasCost ? fmtCost(totalCost) : '—'}</div><div class="sub">where known</div></div>
+        <div class="card"><div class="label">Total tokens</div><div class="value">${fmtTok(totalTok)}</div><div class="sub">${fmtNum(totalTok)} raw</div></div>
+        <div class="card"><div class="label">Requests</div><div class="value">${fmtNum(totalReq)}</div><div class="sub">across providers</div></div>
+        <div class="card"><div class="label">Active sources</div><div class="value">${active}/5</div><div class="sub">configured or local</div></div>
+      `;
+
+      // cost share bar
+      const costs = data.providers.map(p => ({ id: p.provider, cost: p.cost_usd || 0 }));
+      const sum = costs.reduce((a, c) => a + c.cost, 0) || 1;
+
+      $('providers').innerHTML = data.providers.map(p => {
+        const est = p.meta && p.meta.estimated;
+        const models = (p.models || []).slice(0, 8);
+        const modelRows = models.map(m => `
+          <tr>
+            <td title="${m.model}">${m.model.length > 28 ? m.model.slice(0, 26) + '…' : m.model}</td>
+            <td>${fmtNum(m.requests)}</td>
+            <td>${fmtTok(m.input_tokens)}</td>
+            <td>${fmtTok(m.output_tokens)}</td>
+            <td>${m.cost_usd != null ? fmtCost(m.cost_usd, est) : '—'}</td>
+          </tr>`).join('');
+        const notes = [
+          ...(p.notes || []).slice(0, 2),
+          ...(p.errors || []).map(e => '⚠ ' + e),
+        ].map(n => `<div>${n}</div>`).join('');
+        const share = sum > 0 && p.cost_usd ? Math.round((p.cost_usd / sum) * 100) : 0;
+        return `
+          <article class="card provider ${p.provider}">
+            <h2>
+              <span>${p.display_name}</span>
+              <span class="badge ${p.source}">${p.source}</span>
+            </h2>
+            <div class="metrics">
+              <div><span>Cost</span><strong>${fmtCost(p.cost_usd, est)}</strong></div>
+              <div><span>Requests</span><strong>${fmtNum(p.requests)}</strong></div>
+              <div><span>Input</span><strong>${fmtTok(p.input_tokens)}</strong></div>
+              <div><span>Output</span><strong>${fmtTok(p.output_tokens)}</strong></div>
+            </div>
+            ${p.cost_usd ? `<div class="bar-wrap"><div class="bar"><i style="width:${share}%;background:${COLORS[p.provider]||'#5b9dff'}"></i></div><div class="sub" style="margin-top:.35rem">${share}% of known cost</div></div>` : ''}
+            ${models.length ? `<div class="models"><table>
+              <thead><tr><th>Model</th><th>Req</th><th>In</th><th>Out</th><th>$</th></tr></thead>
+              <tbody>${modelRows}</tbody>
+            </table></div>` : ''}
+            ${notes ? `<div class="notes">${notes}</div>` : ''}
+            ${p.meta && p.meta.console_url ? `<div class="notes"><a style="color:var(--accent)" href="${p.meta.console_url}" target="_blank" rel="noopener">Open console ↗</a></div>` : ''}
+          </article>
+        `;
+      }).join('');
+    }
+
+    $('refresh').addEventListener('click', load);
+    $('days').addEventListener('change', load);
+    load();
+  </script>
+</body>
+</html>
