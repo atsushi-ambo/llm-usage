@@ -103,6 +103,18 @@ def dashboard_cmd(
     )
 
 
+@app.command("menubar")
+def menubar_cmd() -> None:
+    """macOS menu bar: show Claude/Grok/Codex quota % in the top-right (click for details)."""
+    from llm_usage.menubar import run_menubar
+
+    console.print(
+        "[cyan]Starting menu bar…[/cyan] Look for [bold]C## · G## · X##[/bold] "
+        "near the clock. Click it for per-app usage."
+    )
+    run_menubar()
+
+
 @app.command("status")
 def status_cmd() -> None:
     """Show which credentials / local data sources are available."""
