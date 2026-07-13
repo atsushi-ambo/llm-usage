@@ -12,32 +12,57 @@ Includes a **CLI** and a **local web dashboard**.
 
 ---
 
-## Quick start
+## Install (use from anywhere)
+
+One-shot install (puts `llm-usage` on your PATH via `uv tool`, same as other tools in `~/.local/bin`):
 
 ```bash
 cd ~/personal/tool/llm-usage
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
+./install.sh
+```
 
-# See what's available on this machine (no keys required)
+Or manually:
+
+```bash
+uv tool install -e ~/personal/tool/llm-usage
+```
+
+Then from **any directory**:
+
+```bash
 llm-usage status
-
-# Pull usage (uses Claude Code local logs out of the box if present)
 llm-usage
 llm-usage --days 7
 llm-usage --format json
+llm-usage dashboard   # → http://127.0.0.1:8765
+```
 
-# Local web UI
-llm-usage dashboard
-# → http://127.0.0.1:8765
+`~/.local/bin` is already on your PATH if you use `uv` / Grok Build. If a new terminal can’t find the command:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"   # add to ~/.zshrc if needed
+```
+
+### Update after code changes
+
+The install is editable (`-e`), so most edits under the repo apply immediately. If the CLI entrypoint changes:
+
+```bash
+uv tool install --force -e ~/personal/tool/llm-usage
+# or: ./install.sh
+```
+
+### Uninstall
+
+```bash
+uv tool uninstall llm-usage
 ```
 
 Optional: copy env template and fill only the keys you have.
 
 ```bash
-cp .env.example .env
-# or: mkdir -p ~/.config/llm-usage && cp .env.example ~/.config/llm-usage/.env
+cp .env.example ~/.config/llm-usage/.env
+# or keep a project-local .env next to the repo
 ```
 
 ---
