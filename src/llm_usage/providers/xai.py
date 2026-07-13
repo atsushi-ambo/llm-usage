@@ -54,6 +54,16 @@ def collect_xai(settings: Settings, start: date, end: date) -> ProviderReport:
             tier = b.get("subscription_tier") or "X Premium"
             pct = b.get("credit_usage_percent")
             period = b.get("period") or {}
+            # Normalized quota for dashboard progress bars
+            if pct is not None:
+                report.meta["quota"] = {
+                    "used_percent": float(pct),
+                    "label": "Weekly limit",
+                    "plan": tier,
+                    "resets_at": period.get("end"),
+                    "period_start": period.get("start"),
+                    "period_type": period.get("type") or "weekly",
+                }
             note = f"Grok Build · plan={tier}"
             if pct is not None:
                 note += f" · weekly quota ~{pct:.0f}% used"

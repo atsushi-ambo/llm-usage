@@ -71,6 +71,27 @@ def collect_codex(settings: Settings, start: date, end: date) -> ProviderReport:
             primary = rate.get("primary_window") or {}
             used = primary.get("used_percent")
             if used is not None:
+                resets_at = None
+                reset_unix = primary.get("reset_at")
+                if isinstance(reset_unix, (int, float)) and reset_unix > 0:
+                    from datetime import datetime, timezone
+
+                    resets_at = datetime.fromtimestamp(
+                        reset_unix, tz=timezone.utc
+                    ).isoformat()
+                window_secs = primary.get("limit_window_seconds")
+                label = "Usage window"
+                if isinstance(window_secs, (int, float)) and window_secs >= 86400:
+                    days = int(window_secs) // 86400
+                    label = f"{days}-day window" if days != 7 else "Weekly window"
+                report.meta["quota"] = {
+                    "used_percent": float(used),
+                    "label": label,
+                    "plan": plan or "free",
+                    "resets_at": resets_at,
+                    "allowed": rate.get("allowed"),
+                    "limit_reached": rate.get("limit_reached"),
+                }
                 report.notes.append(
                     f"Live Codex quota: {used}% of primary window used "
                     f"(plan={plan or 'unknown'}, allowed={rate.get('allowed')})."
