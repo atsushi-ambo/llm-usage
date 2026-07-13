@@ -1,8 +1,8 @@
-"""macOS menu bar app — visual usage bars in the top-right corner."""
+"""macOS menu bar — one colorful usage bar + switchable provider."""
 
 from __future__ import annotations
 
-import math
+import json
 import subprocess
 import tempfile
 import threading
@@ -15,18 +15,41 @@ from llm_usage.config import load_settings
 from llm_usage.models import AggregateReport, ProviderReport
 from llm_usage.providers import collect_all
 
-
 REFRESH_SECONDS = 120
+PREFS_PATH = Path.home() / ".config" / "llm-usage" / "menubar.json"
 
-# Display order + colors (RGB 0–255) for bars
+# Default: Grok in the menu bar (user can switch)
+DEFAULT_FOCUS = "grok"
+
 PROVIDER_STYLE: dict[str, dict] = {
-    "claude": {"letter": "C", "rgb": (212, 162, 127)},
-    "codex": {"letter": "X", "rgb": (34, 197, 94)},
-    "openai": {"letter": "O", "rgb": (16, 163, 127)},
-    "grok": {"letter": "G", "rgb": (167, 139, 250)},
-    "cursor": {"letter": "Cu", "rgb": (96, 165, 250)},
-    "gemini": {"letter": "Ge", "rgb": (251, 191, 36)},
+    "claude": {"letter": "C", "short": "Claude", "rgb": (212, 162, 127)},
+    "codex": {"letter": "X", "short": "Codex", "rgb": (34, 197, 94)},
+    "openai": {"letter": "O", "short": "OpenAI", "rgb": (16, 163, 127)},
+    "grok": {"letter": "G", "short": "Grok", "rgb": (167, 139, 250)},
+    "cursor": {"letter": "Cu", "short": "Cursor", "rgb": (96, 165, 250)},
+    "gemini": {"letter": "Ge", "short": "Gemini", "rgb": (251, 191, 36)},
 }
+
+FOCUS_ORDER = ["grok", "codex", "claude", "cursor", "gemini", "openai"]
+
+
+def _load_prefs() -> dict:
+    if PREFS_PATH.exists():
+        try:
+            data = json.loads(PREFS_PATH.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+        except (OSError, json.JSONDecodeError):
+            pass
+    return {"focus": DEFAULT_FOCUS}
+
+
+def _save_prefs(prefs: dict) -> None:
+    PREFS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        PREFS_PATH.write_text(json.dumps(prefs, indent=2), encoding="utf-8")
+    except OSError:
+        pass
 
 
 def _quota_of(p: ProviderReport) -> float | None:
@@ -40,89 +63,40 @@ def _quota_of(p: ProviderReport) -> float | None:
         return None
 
 
-def _active_quotas(report: AggregateReport) -> list[tuple[str, str, float, tuple[int, int, int]]]:
-    """Return (provider_id, letter, pct, rgb) for providers with quota %."""
-    out: list[tuple[str, str, float, tuple[int, int, int]]] = []
+def _find_provider(report: AggregateReport, pid: str) -> ProviderReport | None:
     for p in report.providers:
-        pct = _quota_of(p)
-        if pct is None:
-            continue
-        style = PROVIDER_STYLE.get(p.provider.value, {"letter": "?", "rgb": (120, 140, 160)})
-        out.append((p.provider.value, style["letter"], pct, style["rgb"]))
-    return out
+        if p.provider.value == pid:
+            return p
+    # codex card may be the merged openai/codex entry
+    if pid == "openai":
+        for p in report.providers:
+            if p.provider.value in ("openai", "codex"):
+                return p
+    return None
 
 
 def _unicode_bar(pct: float, width: int = 10) -> str:
-    """Text progress bar using block characters."""
     filled = int(round((pct / 100.0) * width))
     filled = max(0, min(width, filled))
-    # Prefer solid blocks that render well in menu bar fonts
     return "█" * filled + "░" * (width - filled)
 
 
-def _title_from_report(report: AggregateReport) -> str:
-    """
-    Menu bar title with mini usage bars, e.g.:
-      X ▓▓▓░░░░░ 29  G ████████░ 84
-    Falls back to highest-only if many providers.
-    """
-    quotas = _active_quotas(report)
-    if not quotas:
-        active = [p for p in report.providers if p.source.value != "unavailable"]
-        return "AI —" if not active else f"AI {len(active)}"
-
-    # 1–2 providers: full bars; 3+: letter + short bar + %
-    if len(quotas) <= 2:
-        parts = []
-        for _pid, letter, pct, _rgb in quotas:
-            parts.append(f"{letter} {_unicode_bar(pct, 8)} {int(round(pct))}")
-        return "  ".join(parts)
-
-    # Many: short bars
-    parts = []
-    for _pid, letter, pct, _rgb in quotas[:4]:
-        parts.append(f"{letter}{_unicode_bar(pct, 5)}{int(round(pct))}")
-    return " ".join(parts)
+def _bar_color_for_pct(pct: float, base_rgb: tuple[int, int, int]) -> tuple[int, int, int]:
+    if pct >= 90:
+        return (255, 99, 99)
+    if pct >= 70:
+        return (245, 197, 66)
+    return base_rgb
 
 
-def _menu_line(p: ProviderReport) -> str:
-    pct = _quota_of(p)
-    q = (p.meta or {}).get("quota") or {}
-    plan = q.get("plan") or ""
-    if pct is not None:
-        bar = _unicode_bar(pct, 12)
-        label = q.get("label") or "quota"
-        extra = f" · {plan}" if plan else ""
-        line = f"{p.display_name}  {bar}  {pct:.0f}%  ({label}){extra}"
-        reset = q.get("resets_at")
-        if reset:
-            try:
-                d = datetime.fromisoformat(str(reset).replace("Z", "+00:00"))
-                line += f" · ↺ {d.strftime('%b %d %H:%M')}"
-            except ValueError:
-                pass
-        return line
-    if p.requests or p.total_tokens:
-        return (
-            f"{p.display_name}: {p.requests:,} req · "
-            f"{p.total_tokens:,} tok"
-            + (f" · ${p.cost_usd:.2f}" if p.cost_usd is not None else "")
-        )
-    if p.source.value == "unavailable":
-        return f"{p.display_name}: not configured"
-    return f"{p.display_name}: {p.source.value}"
-
-
-def _render_bar_icon_png(quotas: list[tuple[str, str, float, tuple[int, int, int]]]) -> Path | None:
-    """
-    Draw a compact multi-row usage-bar icon for the menu bar.
-
-    Returns path to a temporary PNG (caller may leave it; OS cleans temp).
-    """
+def _render_single_bar_icon(pct: float, rgb: tuple[int, int, int]) -> Path | None:
+    """One horizontal usage bar for the menu bar (Grok-style)."""
     try:
         from AppKit import (  # type: ignore
+            NSBezierPath,
             NSBitmapImageRep,
             NSCalibratedRGBColorSpace,
+            NSColor,
             NSDeviceRGBColorSpace,
             NSGraphicsContext,
             NSImage,
@@ -132,109 +106,63 @@ def _render_bar_icon_png(quotas: list[tuple[str, str, float, tuple[int, int, int
     except ImportError:
         return None
 
-    # Retina-friendly pixel size (points × 2)
     scale = 2
-    # width in points ~ 22–28 so it sits nicely in the menu bar
-    pt_w, pt_h = 28, 18
+    pt_w, pt_h = 26, 12
     px_w, px_h = pt_w * scale, pt_h * scale
 
-    if not quotas:
-        # empty grey bar
-        quotas = [("none", "?", 0.0, (90, 100, 110))]
-
-    # Cap to 3 rows so icon stays readable
-    rows = quotas[:3]
-    n = len(rows)
-
     rep = NSBitmapImageRep.alloc().initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel_(
-        None,
-        px_w,
-        px_h,
-        8,
-        4,
-        True,
-        False,
-        NSCalibratedRGBColorSpace,
-        0,
-        0,
+        None, px_w, px_h, 8, 4, True, False, NSCalibratedRGBColorSpace, 0, 0
     )
     if rep is None:
         rep = NSBitmapImageRep.alloc().initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel_(
-            None,
-            px_w,
-            px_h,
-            8,
-            4,
-            True,
-            False,
-            NSDeviceRGBColorSpace,
-            0,
-            0,
+            None, px_w, px_h, 8, 4, True, False, NSDeviceRGBColorSpace, 0, 0
         )
     if rep is None:
         return None
 
     img = NSImage.alloc().initWithSize_((pt_w, pt_h))
     img.addRepresentation_(rep)
-
     img.lockFocus()
     try:
         ctx = NSGraphicsContext.currentContext()
         if ctx is not None:
             ctx.setShouldAntialias_(True)
-            ctx.setImageInterpolation_(3)  # high
-
-        # Clear transparent background
-        from AppKit import NSBezierPath, NSColor  # type: ignore
 
         NSColor.clearColor().set()
         NSBezierPath.fillRect_(NSMakeRect(0, 0, pt_w, pt_h))
 
-        pad_x = 1.0
-        pad_y = 1.5
-        gap = 1.5
-        usable_h = pt_h - 2 * pad_y - gap * (n - 1)
-        bar_h = max(2.5, usable_h / n)
-        track_w = pt_w - 2 * pad_x
+        pad = 0.5
+        bar_h = pt_h - 2 * pad
+        track_w = pt_w - 2 * pad
+        y = pad
 
-        for i, (_pid, _letter, pct, rgb) in enumerate(rows):
-            y = pt_h - pad_y - (i + 1) * bar_h - i * gap
-            # track (dark)
-            NSColor.colorWithCalibratedRed_green_blue_alpha_(0.18, 0.22, 0.28, 0.95).set()
-            track = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
-                NSMakeRect(pad_x, y, track_w, bar_h), bar_h / 2, bar_h / 2
-            )
-            track.fill()
-            # fill
-            r, g, b = rgb[0] / 255.0, rgb[1] / 255.0, rgb[2] / 255.0
-            # warn tint when high
-            if pct >= 90:
-                r, g, b = 1.0, 0.42, 0.42
-            elif pct >= 70:
-                r, g, b = 0.96, 0.77, 0.26
-            NSColor.colorWithCalibratedRed_green_blue_alpha_(r, g, b, 1.0).set()
-            fill_w = max(bar_h, track_w * (pct / 100.0))  # at least a pill tip
-            if pct <= 0:
-                continue
+        # track
+        NSColor.colorWithCalibratedRed_green_blue_alpha_(0.22, 0.26, 0.32, 1.0).set()
+        track = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+            NSMakeRect(pad, y, track_w, bar_h), bar_h / 2, bar_h / 2
+        )
+        track.fill()
+
+        fill_rgb = _bar_color_for_pct(pct, rgb)
+        r, g, b = fill_rgb[0] / 255.0, fill_rgb[1] / 255.0, fill_rgb[2] / 255.0
+        NSColor.colorWithCalibratedRed_green_blue_alpha_(r, g, b, 1.0).set()
+        if pct > 0:
+            fill_w = max(bar_h * 0.9, track_w * (pct / 100.0))
             fill = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
-                NSMakeRect(pad_x, y, min(fill_w, track_w), bar_h), bar_h / 2, bar_h / 2
+                NSMakeRect(pad, y, min(fill_w, track_w), bar_h), bar_h / 2, bar_h / 2
             )
             fill.fill()
     finally:
         img.unlockFocus()
 
-    # Write PNG
     tdir = Path(tempfile.gettempdir()) / "llm-usage-menubar"
     tdir.mkdir(exist_ok=True)
     out = tdir / "status.png"
     try:
-        # Prefer representation that has pixels
         tiff = img.TIFFRepresentation()
         if tiff is None:
             return None
-        from AppKit import NSBitmapImageRep as BIR  # type: ignore
-
-        rep2 = BIR.imageRepWithData_(tiff)
+        rep2 = NSBitmapImageRep.imageRepWithData_(tiff)
         if rep2 is None:
             return None
         data = rep2.representationUsingType_properties_(NSPNGFileType, None)
@@ -246,45 +174,6 @@ def _render_bar_icon_png(quotas: list[tuple[str, str, float, tuple[int, int, int
         return None
 
 
-def _apply_icon(app, report: AggregateReport | None) -> None:
-    """Set menu bar icon to usage bars; keep a short title as backup."""
-    if report is None:
-        app.title = "AI …"
-        try:
-            app.icon = None
-        except Exception:
-            pass
-        return
-
-    quotas = _active_quotas(report)
-    path = _render_bar_icon_png(quotas)
-    title = _title_from_report(report)
-
-    if path and path.exists():
-        try:
-            # Color bars — not a template (monochrome) image
-            app.template = False
-            app.icon = str(path)
-            # Short title next to icon: highest usage only (avoids clutter)
-            if quotas:
-                # Show max % next to the bar graphic
-                max_pct = max(q[2] for q in quotas)
-                letter = next(q[1] for q in quotas if q[2] == max_pct)
-                app.title = f" {int(round(max_pct))}%"
-            else:
-                app.title = ""
-            return
-        except Exception:
-            pass
-
-    # Fallback: text-only unicode bars (no AppKit image)
-    app.title = title
-    try:
-        app.icon = None
-    except Exception:
-        pass
-
-
 def run_menubar() -> None:
     """Start the menu bar app (blocks). Requires rumps on macOS."""
     try:
@@ -293,61 +182,249 @@ def run_menubar() -> None:
         raise SystemExit(
             "Menu bar requires 'rumps'. Install with:\n"
             "  uv tool install --force -e ~/personal/tool/llm-usage\n"
-            "or: pip install rumps\n"
             f"({exc})"
         ) from exc
 
     settings = load_settings()
-    state: dict = {"report": None, "error": None, "updating": False}
+    prefs = _load_prefs()
+    state: dict = {
+        "report": None,
+        "error": None,
+        "updating": False,
+        "focus": prefs.get("focus") or DEFAULT_FOCUS,
+    }
 
-    app = rumps.App("llm-usage", title="AI …", quit_button=None)
+    app = rumps.App("llm-usage", title="…", quit_button=None)
 
-    status_item = rumps.MenuItem("Loading…")
-    open_dash = rumps.MenuItem("Open Dashboard")
-    refresh_item = rumps.MenuItem("Refresh Now")
-    quit_item = rumps.MenuItem("Quit llm-usage")
+    # Keep strong refs so callbacks aren't GC'd
+    callbacks: list = []
+
+    def noop(_=None) -> None:
+        """Enabled menu rows need a callback so macOS doesn't gray them out."""
+        return None
+
+    def set_focus(pid: str) -> None:
+        state["focus"] = pid
+        prefs["focus"] = pid
+        _save_prefs(prefs)
+        report = state.get("report")
+        if report is not None:
+            _apply_status(app, report, state["focus"])
+            rebuild_menu(report)
+
+    def _apply_status(app_obj, report: AggregateReport, focus: str) -> None:
+        p = _find_provider(report, focus)
+        # Prefer focus; if no quota, fall back to grok then first with quota
+        if p is None or _quota_of(p) is None:
+            for candidate in [focus, DEFAULT_FOCUS, "codex", "claude"]:
+                p = _find_provider(report, candidate)
+                if p is not None and _quota_of(p) is not None:
+                    focus = candidate
+                    break
+            else:
+                p = None
+
+        if p is None:
+            pct = None
+        else:
+            pct = _quota_of(p)
+
+        style = PROVIDER_STYLE.get(
+            focus if p else DEFAULT_FOCUS,
+            {"letter": "?", "short": "AI", "rgb": (140, 150, 160)},
+        )
+        rgb = style["rgb"]
+
+        if pct is None:
+            app_obj.title = " AI"
+            try:
+                app_obj.icon = None
+            except Exception:
+                pass
+            return
+
+        path = _render_single_bar_icon(pct, rgb)
+        if path and path.exists():
+            try:
+                app_obj.template = False
+                app_obj.icon = str(path)
+            except Exception:
+                pass
+        # Colorful-feeling title: letter + percent (bar is the icon)
+        app_obj.title = f" {style['letter']}{int(round(pct))}%"
 
     def rebuild_menu(report: AggregateReport | None, error: str | None = None) -> None:
         app.menu.clear()
+        callbacks.clear()
+
+        def add_enabled(title: str, callback=None, checked: bool = False) -> rumps.MenuItem:
+            item = rumps.MenuItem(title)
+            cb = callback or noop
+            item.set_callback(cb)
+            if checked:
+                item.state = 1
+            app.menu.add(item)
+            callbacks.append(item)
+            return item
+
         if error:
-            app.menu.add(rumps.MenuItem(f"⚠ {error[:70]}"))
+            add_enabled(f"⚠ {error[:70]}")
+
         if report is None:
-            app.menu.add(status_item)
+            add_enabled("Loading…")
         else:
-            app.menu.add(
-                rumps.MenuItem(
-                    f"Updated {datetime.now().strftime('%H:%M:%S')} · "
-                    f"{report.period_start} → {report.period_end}"
-                )
+            add_enabled(
+                f"Updated {datetime.now().strftime('%H:%M:%S')}  ·  "
+                f"{report.period_start} → {report.period_end}"
             )
             app.menu.add(None)
-            # Visual bar legend
-            quotas = _active_quotas(report)
-            if quotas:
-                legend = "  ".join(f"{letter}={int(round(pct))}%" for _p, letter, pct, _c in quotas)
-                app.menu.add(rumps.MenuItem(f"Bars: {legend}"))
-                app.menu.add(None)
+
+            # ── Per-provider usage (enabled = not gray) ──
             for p in report.providers:
-                item = rumps.MenuItem(_menu_line(p))
-                windows = ((p.meta or {}).get("quota") or {}).get("windows") or []
-                for w in windows:
-                    if w.get("used_percent") is None:
-                        continue
-                    wp = float(w["used_percent"])
-                    sub = rumps.MenuItem(
-                        f"  {w.get('label')}  {_unicode_bar(wp, 10)}  {wp:.0f}%"
+                pct = _quota_of(p)
+                style = PROVIDER_STYLE.get(
+                    p.provider.value, {"letter": "?", "rgb": (120, 140, 160)}
+                )
+                if pct is not None:
+                    bar = _unicode_bar(pct, 12)
+                    q = (p.meta or {}).get("quota") or {}
+                    plan = q.get("plan") or ""
+                    label = q.get("label") or "quota"
+                    line = f"{style['letter']}  {p.display_name}  {bar}  {pct:.0f}%"
+                    if plan:
+                        line += f"  ·  {plan}"
+                    item = add_enabled(line)
+                    # Sub-windows
+                    for w in q.get("windows") or []:
+                        if w.get("used_percent") is None:
+                            continue
+                        wp = float(w["used_percent"])
+                        sub = rumps.MenuItem(
+                            f"    {w.get('label')}  {_unicode_bar(wp, 10)}  {wp:.0f}%"
+                        )
+                        sub.set_callback(noop)
+                        item.add(sub)
+                        callbacks.append(sub)
+                    reset = q.get("resets_at")
+                    if reset:
+                        try:
+                            d = datetime.fromisoformat(str(reset).replace("Z", "+00:00"))
+                            sub = rumps.MenuItem(f"    Resets {d.strftime('%b %d, %H:%M')}")
+                            sub.set_callback(noop)
+                            item.add(sub)
+                            callbacks.append(sub)
+                        except ValueError:
+                            pass
+                elif p.requests or p.total_tokens:
+                    cost = f"  ·  ${p.cost_usd:.2f}" if p.cost_usd is not None else ""
+                    add_enabled(
+                        f"{style['letter']}  {p.display_name}  ·  "
+                        f"{p.requests:,} req  ·  {p.total_tokens:,} tok{cost}"
                     )
-                    item.add(sub)
-                app.menu.add(item)
+                else:
+                    add_enabled(f"{style['letter']}  {p.display_name}  ·  not configured")
+
             app.menu.add(None)
+
+            # ── Switch which bar shows in the menu bar ──
+            focus_menu = rumps.MenuItem("Show in menu bar")
+            focus_menu.set_callback(noop)
+            callbacks.append(focus_menu)
+
+            for pid in FOCUS_ORDER:
+                # Only list providers we actually have a card for
+                prov = _find_provider(report, pid)
+                if prov is None:
+                    continue
+                style = PROVIDER_STYLE.get(pid, {"short": pid, "letter": "?"})
+                pct = _quota_of(prov)
+                label = style["short"]
+                if pct is not None:
+                    label = f"{style['short']}  ({pct:.0f}%)"
+                elif prov.source.value == "unavailable" and not (
+                    prov.requests or prov.total_tokens
+                ):
+                    label = f"{style['short']}  (n/a)"
+
+                def _make_cb(provider_id: str):
+                    def _cb(_=None, _pid=provider_id) -> None:
+                        set_focus(_pid)
+
+                    return _cb
+
+                sub = rumps.MenuItem(label)
+                sub.set_callback(_make_cb(pid))
+                if state["focus"] == pid or (
+                    state["focus"] == "openai" and pid == "codex"
+                ):
+                    sub.state = 1
+                # also check exact focus match
+                if state["focus"] == pid:
+                    sub.state = 1
+                focus_menu.add(sub)
+                callbacks.append(sub)
+
+            app.menu.add(focus_menu)
+            callbacks.append(focus_menu)
+
             costs = [p.cost_usd for p in report.providers if p.cost_usd is not None]
             if costs:
-                app.menu.add(rumps.MenuItem(f"Known cost: ${sum(costs):.2f}"))
+                app.menu.add(None)
+                add_enabled(f"Known cost: ${sum(costs):.2f}")
+
         app.menu.add(None)
+
+        open_dash = rumps.MenuItem("Open Dashboard")
+        refresh_item = rumps.MenuItem("Refresh Now")
+        quit_item = rumps.MenuItem("Quit llm-usage")
+
+        def _open_dashboard(_=None) -> None:
+            def _run() -> None:
+                try:
+                    import httpx
+
+                    r = httpx.get(
+                        f"http://{settings.host}:{settings.port}/api/health",
+                        timeout=1.0,
+                    )
+                    if r.status_code == 200:
+                        webbrowser.open(f"http://{settings.host}:{settings.port}/")
+                        return
+                except Exception:  # noqa: BLE001
+                    pass
+                subprocess.Popen(
+                    [
+                        "llm-usage",
+                        "dashboard",
+                        "--host",
+                        settings.host,
+                        "--port",
+                        str(settings.port),
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+                time.sleep(1.2)
+                webbrowser.open(f"http://{settings.host}:{settings.port}/")
+
+            threading.Thread(target=_run, daemon=True).start()
+
+        def _refresh(_=None) -> None:
+            app.title = " …"
+            threading.Thread(target=do_collect, daemon=True).start()
+
+        def _quit(_=None) -> None:
+            rumps.quit_application()
+
+        open_dash.set_callback(_open_dashboard)
+        refresh_item.set_callback(_refresh)
+        quit_item.set_callback(_quit)
         app.menu.add(open_dash)
         app.menu.add(refresh_item)
         app.menu.add(None)
         app.menu.add(quit_item)
+        callbacks.extend([open_dash, refresh_item, quit_item])
 
     def do_collect() -> None:
         if state["updating"]:
@@ -357,11 +434,11 @@ def run_menubar() -> None:
             report = collect_all(settings, days=settings.days)
             state["report"] = report
             state["error"] = None
-            _apply_icon(app, report)
+            _apply_status(app, report, state["focus"])
             rebuild_menu(report)
         except Exception as exc:  # noqa: BLE001
             state["error"] = str(exc)
-            app.title = "AI !"
+            app.title = " AI!"
             rebuild_menu(state.get("report"), error=str(exc))
         finally:
             state["updating"] = False
@@ -370,47 +447,6 @@ def run_menubar() -> None:
         while True:
             do_collect()
             time.sleep(REFRESH_SECONDS)
-
-    @open_dash.set_callback
-    def _open_dashboard(_=None) -> None:
-        def _run() -> None:
-            try:
-                import httpx
-
-                r = httpx.get(
-                    f"http://{settings.host}:{settings.port}/api/health", timeout=1.0
-                )
-                if r.status_code == 200:
-                    webbrowser.open(f"http://{settings.host}:{settings.port}/")
-                    return
-            except Exception:  # noqa: BLE001
-                pass
-            subprocess.Popen(
-                [
-                    "llm-usage",
-                    "dashboard",
-                    "--host",
-                    settings.host,
-                    "--port",
-                    str(settings.port),
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-            time.sleep(1.2)
-            webbrowser.open(f"http://{settings.host}:{settings.port}/")
-
-        threading.Thread(target=_run, daemon=True).start()
-
-    @refresh_item.set_callback
-    def _refresh(_=None) -> None:
-        app.title = "…"
-        threading.Thread(target=do_collect, daemon=True).start()
-
-    @quit_item.set_callback
-    def _quit(_=None) -> None:
-        rumps.quit_application()
 
     rebuild_menu(None)
     threading.Thread(target=background_loop, daemon=True).start()
