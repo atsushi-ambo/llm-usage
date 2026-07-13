@@ -36,6 +36,12 @@ if command -v llm-usage >/dev/null 2>&1; then
   echo "  llm-usage status"
   echo "  llm-usage"
   echo "  llm-usage dashboard"
+  echo "  llm-usage menubar          # macOS menu bar (quota % near the clock)"
+  echo
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    echo "Optional — start menu bar at login:"
+    echo "  ${ROOT}/scripts/install-menubar-launchagent.sh"
+  fi
 else
   echo
   echo "Binary installed but not on PATH yet."

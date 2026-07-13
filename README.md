@@ -35,7 +35,20 @@ llm-usage
 llm-usage --days 7
 llm-usage --format json
 llm-usage dashboard   # → http://127.0.0.1:8765
+llm-usage menubar     # macOS: quota % in the menu bar (click for all AIs)
 ```
+
+### macOS menu bar (like Kanary)
+
+Shows compact quotas near the clock, e.g. `C41 · G63 · X29` (Claude / Grok / Codex).
+
+```bash
+llm-usage menubar
+# start at login:
+./scripts/install-menubar-launchagent.sh
+```
+
+Click the title → per-app % used, Open Dashboard, Refresh, Quit.
 
 `~/.local/bin` is already on your PATH if you use `uv` / Grok Build. If a new terminal can’t find the command:
 

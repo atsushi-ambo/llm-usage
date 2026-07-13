@@ -304,6 +304,7 @@
           label: meta.quota.label || 'Quota',
           plan: meta.quota.plan || null,
           resets_at: meta.quota.resets_at || null,
+          windows: meta.quota.windows || [],
         };
       }
       // Grok billing snapshot
@@ -315,7 +316,39 @@
             label: 'Weekly limit',
             plan: sub.subscription_tier || null,
             resets_at: (sub.period && sub.period.end) || null,
+            windows: [],
           };
+        }
+        // Claude OAuth shape: five_hour / seven_day
+        if (sub.five_hour || sub.seven_day) {
+          const windows = [];
+          const push = (key, label) => {
+            const b = sub[key];
+            if (!b) return;
+            let util = b.utilization != null ? b.utilization : b.utilization_pct;
+            if (util == null && b.used != null && b.limit) util = b.used / b.limit;
+            if (util == null) return;
+            const pct = util <= 1 ? util * 100 : util;
+            windows.push({
+              key, label,
+              used_percent: clampPct(pct),
+              resets_at: b.resets_at || b.resetsAt || null,
+            });
+          };
+          push('five_hour', '5-hour');
+          push('seven_day', '7-day');
+          push('seven_day_sonnet', '7-day Sonnet');
+          push('seven_day_opus', '7-day Opus');
+          const primary = windows.find(w => w.key === 'seven_day') || windows[0];
+          if (primary) {
+            return {
+              used_percent: primary.used_percent,
+              label: primary.label + ' limit',
+              plan: meta.plan_type || 'Claude',
+              resets_at: primary.resets_at,
+              windows,
+            };
+          }
         }
         // Codex /wham/usage shape
         const primary = sub.rate_limit && sub.rate_limit.primary_window;
@@ -329,18 +362,33 @@
             label: 'Usage window',
             plan: sub.plan_type || meta.plan_type || null,
             resets_at: resets,
+            windows: [],
           };
         }
       }
       return null;
     }
 
-    function renderQuotaBlock(quota, color, compact) {
+    function renderQuotaBlock(quota, color) {
       if (!quota || quota.used_percent == null) return '';
       const pct = quota.used_percent;
       const cls = pctClass(pct);
       const fill = barColor(pct, color);
       const reset = fmtReset(quota.resets_at);
+      const extraWindows = (quota.windows || []).filter(w =>
+        w && w.used_percent != null && w.label !== (quota.label || '').replace(' limit','')
+      );
+      const windowRows = extraWindows.map(w => {
+        const wp = clampPct(w.used_percent);
+        return `
+          <div class="quota-meta" style="margin-top:.4rem">
+            <span><strong>${w.label}</strong></span>
+            <span class="${pctClass(wp)}">${Math.round(wp)}%</span>
+          </div>
+          <div class="quota-track" style="height:7px">
+            <i class="quota-fill" style="width:${wp}%;background:${barColor(wp, color)}"></i>
+          </div>`;
+      }).join('');
       return `
         <div class="quota-block">
           <div class="quota-head">
@@ -358,6 +406,7 @@
             <span>${quota.plan ? `Plan: <strong>${quota.plan}</strong>` : ''}</span>
             <span>${Math.round(100 - pct)}% remaining</span>
           </div>
+          ${windowRows}
         </div>
       `;
     }

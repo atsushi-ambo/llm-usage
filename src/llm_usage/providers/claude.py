@@ -20,16 +20,29 @@ from llm_usage.models import (
 )
 from llm_usage.pricing import estimate_cost
 from llm_usage.providers.base import parse_iso_date, safe_float, safe_int
+from llm_usage.quota import (
+    claude_quota_from_oauth,
+    read_json_cache,
+    read_json_cache_stale,
+    write_json_cache,
+)
+
+_CACHE_NAME = "claude_oauth_usage.json"
 
 
 def collect_claude(settings: Settings, start: date, end: date) -> ProviderReport:
     report = ProviderReport(
         provider=ProviderId.CLAUDE,
-        display_name="Claude / Anthropic",
+        display_name="Claude Code",
         source=SourceKind.UNAVAILABLE,
         period_start=start,
         period_end=end,
+        meta={"console_url": "https://claude.ai/settings/usage"},
     )
+
+    cred_meta = _read_claude_cred_meta(settings.claude_credentials_path)
+    if cred_meta.get("plan"):
+        report.meta["plan_type"] = cred_meta["plan"]
 
     # 1) Admin Usage + Cost API (most accurate for Console org)
     if settings.anthropic_admin_key:
@@ -66,20 +79,60 @@ def collect_claude(settings: Settings, start: date, end: date) -> ProviderReport
     oauth_token = _read_claude_oauth_token(settings.claude_credentials_path)
     if oauth_token:
         try:
-            quota = _fetch_oauth_usage(oauth_token)
-            report.meta["subscription"] = quota
-            if report.source == SourceKind.UNAVAILABLE:
-                report.source = SourceKind.SUBSCRIPTION
-            report.notes.append("Claude subscription quota attached (OAuth usage API)")
+            usage = _fetch_oauth_usage_cached(oauth_token)
+            report.meta["subscription"] = usage
+            q = claude_quota_from_oauth(
+                usage, plan=cred_meta.get("plan") or "Claude Code"
+            )
+            if q.get("used_percent") is not None:
+                report.meta["quota"] = q
+                if report.source == SourceKind.UNAVAILABLE:
+                    report.source = SourceKind.SUBSCRIPTION
+                note = f"Claude Code · plan={q.get('plan')}"
+                note += f" · {q.get('label', 'quota')} {q['used_percent']:.0f}% used"
+                report.notes.append(note)
+                for w in q.get("windows") or []:
+                    if w.get("key") != "seven_day" and w.get("used_percent") is not None:
+                        report.notes.append(
+                            f"  {w['label']}: {w['used_percent']:.0f}% used"
+                        )
+            else:
+                report.notes.append("Claude OAuth usage returned (no utilization fields)")
         except Exception as exc:  # noqa: BLE001
-            report.errors.append(f"OAuth usage: {exc}")
+            # Still surface plan from credentials if we have local usage
+            stale = read_json_cache_stale(_CACHE_NAME)
+            if stale:
+                q = claude_quota_from_oauth(
+                    stale, plan=cred_meta.get("plan") or "Claude Code"
+                )
+                if q.get("used_percent") is not None:
+                    report.meta["quota"] = q
+                    report.meta["subscription"] = stale
+                    report.meta["quota_stale"] = True
+                    report.notes.append(
+                        f"Claude quota from cache ({q.get('label')}: "
+                        f"{q['used_percent']:.0f}%) — live API: {exc}"
+                    )
+                else:
+                    report.errors.append(f"OAuth usage: {exc}")
+            else:
+                report.errors.append(f"OAuth usage: {exc}")
+                if cred_meta.get("plan"):
+                    report.notes.append(
+                        f"Claude Code plan={cred_meta['plan']} "
+                        "(quota API unavailable right now; local tokens shown)"
+                    )
+    elif settings.claude_projects_dir.exists():
+        report.notes.append(
+            "Claude Code logs found but no OAuth credentials — run `claude` to log in "
+            "for live 5h/7d quota %."
+        )
 
     if report.source == SourceKind.UNAVAILABLE:
         report.notes.append(
             "No Claude data found. Log in with Claude Code, or set ANTHROPIC_ADMIN_KEY "
             "for Console usage reports."
         )
-        report.meta["console_url"] = "https://console.anthropic.com/settings/usage"
 
     return report
 
@@ -389,34 +442,51 @@ def _merge_usage_buckets(report: ProviderReport, pages: list[dict[str, Any]]) ->
 
 
 def _read_claude_oauth_token(path: Path) -> str | None:
+    meta = _read_claude_cred_meta(path)
+    return meta.get("access_token")
+
+
+def _read_claude_cred_meta(path: Path) -> dict[str, Any]:
+    out: dict[str, Any] = {}
     if not path.exists():
-        return None
+        return out
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return None
-    # common shapes
-    for key in ("claudeAiOauth", "oauth", "accessToken", "access_token"):
+        return out
+    block = data.get("claudeAiOauth") if isinstance(data, dict) else None
+    if isinstance(block, dict):
+        if block.get("accessToken") or block.get("access_token"):
+            out["access_token"] = str(block.get("accessToken") or block.get("access_token"))
+        if block.get("subscriptionType"):
+            out["plan"] = str(block["subscriptionType"])
+        if block.get("rateLimitTier"):
+            out["rate_limit_tier"] = str(block["rateLimitTier"])
+        return out
+    for key in ("oauth", "accessToken", "access_token"):
         if key in data:
             val = data[key]
             if isinstance(val, str) and val:
-                return val
-            if isinstance(val, dict):
+                out["access_token"] = val
+            elif isinstance(val, dict):
                 token = val.get("accessToken") or val.get("access_token")
                 if token:
-                    return str(token)
-    # nested credentials
-    if isinstance(data.get("claudeAiOauth"), dict):
-        t = data["claudeAiOauth"].get("accessToken")
-        if t:
-            return str(t)
-    return None
+                    out["access_token"] = str(token)
+                if val.get("subscriptionType"):
+                    out["plan"] = str(val["subscriptionType"])
+    return out
 
 
-def _fetch_oauth_usage(token: str) -> dict[str, Any]:
+def _fetch_oauth_usage_cached(token: str) -> dict[str, Any]:
+    # Prefer fresh cache to avoid Anthropic 429 storms
+    cached = read_json_cache(_CACHE_NAME, max_age_s=300)
+    if cached is not None:
+        return cached
+
     headers = {
         "Authorization": f"Bearer {token}",
         "anthropic-beta": "oauth-2025-04-20",
+        "Content-Type": "application/json",
         "User-Agent": "llm-usage/0.1.0",
     }
     with httpx.Client(timeout=20.0) as client:
@@ -425,5 +495,13 @@ def _fetch_oauth_usage(token: str) -> dict[str, Any]:
             raise RuntimeError("OAuth token rejected (401) — re-login to Claude Code")
         if resp.status_code == 404:
             raise RuntimeError("OAuth usage not available for this account")
+        if resp.status_code == 429:
+            stale = read_json_cache_stale(_CACHE_NAME)
+            if stale is not None:
+                return stale
+            raise RuntimeError("Rate limited (429) — try again in a few minutes")
         resp.raise_for_status()
-        return resp.json()
+        body = resp.json()
+        if isinstance(body, dict):
+            write_json_cache(_CACHE_NAME, body)
+        return body
