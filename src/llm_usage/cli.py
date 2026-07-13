@@ -78,6 +78,12 @@ def dashboard_cmd(
     settings = load_settings()
     bind_host = host or settings.host
     bind_port = port or settings.port
+    if bind_host not in ("127.0.0.1", "localhost", "::1"):
+        console.print(
+            f"[yellow]⚠ Binding to {bind_host}: the dashboard has no authentication "
+            "and exposes your usage data. Keep it on 127.0.0.1 unless you trust "
+            "the network.[/yellow]"
+        )
     if days is not None:
         # temporarily override via env for the app process
         import os
@@ -329,7 +335,7 @@ def _print_table(report: AggregateReport) -> None:
             f"${report.total_cost_usd:,.2f}"
         )
     console.print(
-        f"[dim]Tip: llm-usage dashboard  ·  llm-usage status  ·  llm-usage --format json[/dim]"
+        "[dim]Tip: llm-usage dashboard  ·  llm-usage status  ·  llm-usage --format json[/dim]"
     )
 
 

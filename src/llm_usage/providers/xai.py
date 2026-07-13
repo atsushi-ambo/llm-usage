@@ -71,8 +71,8 @@ def collect_xai(settings: Settings, start: date, end: date) -> ProviderReport:
                 note += f" ({period['start'][:10]} → {period['end'][:10]})"
             report.notes.append(note)
         report.notes.append(
-            f"Token totals from ~/.grok/logs/unified.jsonl "
-            f"(inference_done events in range)."
+            "Token totals from ~/.grok/logs/unified.jsonl "
+            "(inference_done events in range)."
         )
 
     # 2) Session summaries as backup activity counts
