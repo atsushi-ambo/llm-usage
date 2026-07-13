@@ -77,12 +77,6 @@
       gap: 1rem;
       margin-bottom: 1.5rem;
     }
-    .quota-row {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-      gap: 1rem;
-      margin-bottom: 1.75rem;
-    }
     .card {
       background: var(--panel);
       border: 1px solid var(--border);
@@ -232,10 +226,6 @@
   <main>
     <p class="section-title">Overview</p>
     <section class="summary" id="summary"></section>
-    <div id="quotas-wrap" style="display:none">
-      <p class="section-title">Subscription quotas</p>
-      <section class="quota-row" id="quotas"></section>
-    </div>
     <p class="section-title">Providers</p>
     <section class="providers" id="providers"></section>
   </main>
@@ -439,24 +429,6 @@
       );
       const totalReq = data.providers.reduce((a, p) => a + (p.requests||0), 0);
       const active = data.providers.filter(p => p.source !== 'unavailable').length;
-
-      // Top subscription quota cards
-      const withQuota = data.providers
-        .map(p => ({ p, q: extractQuota(p) }))
-        .filter(x => x.q);
-
-      if (withQuota.length) {
-        $('quotas-wrap').style.display = '';
-        $('quotas').innerHTML = withQuota.map(({ p, q }) => `
-          <div class="card">
-            <div class="label">${p.display_name}</div>
-            ${renderQuotaBlock(q, COLORS[p.provider])}
-          </div>
-        `).join('');
-      } else {
-        $('quotas-wrap').style.display = 'none';
-        $('quotas').innerHTML = '';
-      }
 
       $('summary').innerHTML = `
         <div class="card"><div class="label">Combined cost</div><div class="value">${hasCost ? fmtCost(totalCost) : '—'}</div><div class="sub">where known</div></div>
