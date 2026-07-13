@@ -1,11 +1,12 @@
 # llm-usage
 
-**One place to see all the LLM usage you actually use** — Claude, OpenAI, Grok (xAI), Cursor, and Gemini.
+**One place to see all the LLM usage you actually use** — Claude, OpenAI, **Codex (ChatGPT free/plus)**, **Grok Build (X Premium)**, Cursor, and Gemini.
 
 Works from:
 
-- **Local logs** (no API keys): Claude Code session JSONL, Gemini CLI chats  
-- **Provider APIs** when you add keys: Anthropic Admin, OpenAI Org Usage/Costs, Cursor Admin/session, xAI, Gemini  
+- **Local logs** (no API keys): Claude Code, Codex rollouts, Grok Build `unified.jsonl`, Gemini CLI  
+- **Live subscription quota**: Codex ChatGPT OAuth (`~/.codex/auth.json`), Grok Build billing snapshots  
+- **Provider APIs** when you add keys: Anthropic Admin, OpenAI Org Usage/Costs, Cursor Admin/session, xAI API  
 
 Includes a **CLI** and a **local web dashboard**.
 
@@ -46,10 +47,18 @@ cp .env.example .env
 | Provider | Without keys | With keys |
 | --- | --- | --- |
 | **Claude** | Parses `~/.claude/projects/**/*.jsonl` (Claude Code). Estimates cost from public prices. Optional OAuth quota from `~/.claude/.credentials.json`. | `ANTHROPIC_ADMIN_KEY` → official Usage + Cost Admin API |
-| **OpenAI** | — | `OPENAI_ADMIN_KEY` (preferred) or `OPENAI_API_KEY` → `/v1/organization/usage/completions` + `/costs` |
-| **Grok (xAI)** | Console links | `XAI_API_KEY` validates models; `XAI_MANAGEMENT_KEY` + `XAI_TEAM_ID` lists team keys. Full spend charts remain in [console.x.ai](https://console.x.ai/team/default/usage) (no public usage time-series API yet) |
-| **Cursor** | Console link | `CURSOR_API_KEY` (Enterprise Admin API) or `CURSOR_SESSION_TOKEN` (`WorkosCursorSessionToken` cookie) |
-| **Gemini** | Parses `~/.gemini/**` CLI chat logs when present | `GEMINI_API_KEY` validates models; spend in [AI Studio Usage](https://aistudio.google.com/usage) |
+| **OpenAI (API)** | — | `OPENAI_ADMIN_KEY` (preferred) or `OPENAI_API_KEY` → org usage/costs |
+| **Codex (ChatGPT plan)** | Parses `~/.codex/sessions/**/*.jsonl`. Live free/plus quota from `~/.codex/auth.json` → ChatGPT `/wham/usage`. | No extra key — Free plan works |
+| **Grok Build (X Premium)** | Parses `~/.grok/logs/unified.jsonl` (tokens + weekly credit %). Sessions under `~/.grok/sessions/`. | Optional `XAI_API_KEY` for separate pay-as-you-go API |
+| **Cursor** | Console link | `CURSOR_API_KEY` or `CURSOR_SESSION_TOKEN` |
+| **Gemini** | Parses `~/.gemini/**` CLI chat logs when present | `GEMINI_API_KEY` |
+
+### Codex free plan & Grok Build
+
+These are **subscription quotas**, not dollar invoices:
+
+- **Codex Free**: shows token totals from local sessions + live `% of window used` and `plan_type=free`.
+- **Grok Build / X Premium**: shows inference token totals from Grok Build logs + weekly `creditUsagePercent` (e.g. 46% of this week’s included quota).
 
 Costs marked **estimated** (`~`) come from local token counts × public list prices — not invoices.
 

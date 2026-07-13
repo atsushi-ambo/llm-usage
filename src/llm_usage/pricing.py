@@ -42,10 +42,14 @@ PRICES: dict[str, ModelPrice] = {
     "gpt-4-turbo": ModelPrice(10.0, 30.0),
     "gpt-3.5-turbo": ModelPrice(0.50, 1.50),
     # xAI / Grok
+    "grok-4.5": ModelPrice(3.0, 15.0),
     "grok-4": ModelPrice(3.0, 15.0),
     "grok-3": ModelPrice(3.0, 15.0),
     "grok-2": ModelPrice(2.0, 10.0),
     "grok-code": ModelPrice(0.20, 1.50),
+    # Codex / OpenAI coding models
+    "gpt-5": ModelPrice(1.25, 10.0),
+    "codex": ModelPrice(1.25, 10.0),
     # Gemini
     "gemini-2.5-pro": ModelPrice(1.25, 10.0),
     "gemini-2.5-flash": ModelPrice(0.15, 0.60),

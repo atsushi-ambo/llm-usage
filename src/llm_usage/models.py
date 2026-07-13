@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 class ProviderId(str, Enum):
     CLAUDE = "claude"
     OPENAI = "openai"
+    CODEX = "codex"
     GROK = "grok"
     CURSOR = "cursor"
     GEMINI = "gemini"
