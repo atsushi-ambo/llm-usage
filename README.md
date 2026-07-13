@@ -17,14 +17,14 @@ Includes a **CLI** and a **local web dashboard**.
 One-shot install (puts `llm-usage` on your PATH via `uv tool`, same as other tools in `~/.local/bin`):
 
 ```bash
-cd ~/personal/tool/llm-usage
+cd llm-usage
 ./install.sh
 ```
 
 Or manually:
 
 ```bash
-uv tool install -e ~/personal/tool/llm-usage
+uv tool install -e .
 ```
 
 Then from **any directory**:
@@ -61,7 +61,7 @@ export PATH="$HOME/.local/bin:$PATH"   # add to ~/.zshrc if needed
 The install is editable (`-e`), so most edits under the repo apply immediately. If the CLI entrypoint changes:
 
 ```bash
-uv tool install --force -e ~/personal/tool/llm-usage
+uv tool install --force -e .
 # or: ./install.sh
 ```
 

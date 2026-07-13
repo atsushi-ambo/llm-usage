@@ -7,7 +7,7 @@ PLIST="${HOME}/Library/LaunchAgents/${LABEL}.plist"
 BIN="$(command -v llm-usage || true)"
 
 if [[ -z "${BIN}" ]]; then
-  echo "llm-usage not on PATH. Run: uv tool install -e ~/personal/tool/llm-usage"
+  echo "llm-usage not on PATH. Run ./install.sh from the repo root first."
   exit 1
 fi
 

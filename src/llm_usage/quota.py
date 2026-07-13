@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,16 +13,29 @@ from typing import Any
 def cache_dir() -> Path:
     d = Path.home() / ".config" / "llm-usage" / "cache"
     d.mkdir(parents=True, exist_ok=True)
+    # The parent config dir may also hold .env with API keys — keep both private.
+    for p in (d, d.parent):
+        try:
+            os.chmod(p, 0o700)
+        except OSError:
+            pass
     return d
 
 
-def read_json_cache(name: str, max_age_s: float = 3600) -> dict[str, Any] | None:
+def _read_cache_file(name: str) -> dict[str, Any] | None:
     path = cache_dir() / name
     if not path.exists():
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def read_json_cache(name: str, max_age_s: float = 3600) -> dict[str, Any] | None:
+    data = _read_cache_file(name)
+    if data is None:
         return None
     ts = data.get("_cached_at")
     if not isinstance(ts, (int, float)):
@@ -39,21 +53,49 @@ def write_json_cache(name: str, payload: dict[str, Any]) -> None:
             json.dumps({"_cached_at": time.time(), "payload": payload}, indent=2),
             encoding="utf-8",
         )
+        os.chmod(path, 0o600)
     except OSError:
         pass
 
 
 def read_json_cache_stale(name: str) -> dict[str, Any] | None:
     """Return cached payload even if expired (for 429 fallback)."""
-    path = cache_dir() / name
-    if not path.exists():
-        return None
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    data = _read_cache_file(name)
+    if data is None:
         return None
     body = data.get("payload")
     return body if isinstance(body, dict) else None
+
+
+def cooldown_remaining(name: str) -> float:
+    """Seconds left on a rate-limit cooldown marker (0 if none)."""
+    data = _read_cache_file(f"{name}.cooldown")
+    if data is None:
+        return 0.0
+    until = data.get("until")
+    if not isinstance(until, (int, float)):
+        return 0.0
+    return max(0.0, until - time.time())
+
+
+def write_cooldown(name: str, seconds: float) -> None:
+    """Remember that an endpoint is rate limited; skip requests until it expires."""
+    path = cache_dir() / f"{name}.cooldown"
+    try:
+        path.write_text(
+            json.dumps({"until": time.time() + max(0.0, seconds)}), encoding="utf-8"
+        )
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def clear_cooldown(name: str) -> None:
+    path = cache_dir() / f"{name}.cooldown"
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def unix_to_iso(ts: Any) -> str | None:

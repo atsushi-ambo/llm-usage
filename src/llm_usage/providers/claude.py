@@ -22,8 +22,11 @@ from llm_usage.pricing import estimate_cost
 from llm_usage.providers.base import parse_iso_date, safe_float, safe_int
 from llm_usage.quota import (
     claude_quota_from_oauth,
+    clear_cooldown,
+    cooldown_remaining,
     read_json_cache,
     read_json_cache_stale,
+    write_cooldown,
     write_json_cache,
 )
 
@@ -69,9 +72,7 @@ def collect_claude(settings: Settings, start: date, end: date) -> ProviderReport
                 f"Local Claude Code logs: {local['requests']:,} msgs, "
                 f"{local['total_tokens']:,} tokens (estimate)"
             )
-            if report.models:
-                pass
-            else:
+            if not report.models:
                 report.models = local["models"]
                 report.daily = local["daily"]
 
@@ -478,10 +479,21 @@ def _read_claude_cred_meta(path: Path) -> dict[str, Any]:
 
 
 def _fetch_oauth_usage_cached(token: str) -> dict[str, Any]:
-    # Prefer fresh cache to avoid Anthropic 429 storms
-    cached = read_json_cache(_CACHE_NAME, max_age_s=300)
+    # Quota moves slowly; a longer cache keeps polling clients (menubar every
+    # 2 min) from tripping Anthropic's rate limit on this endpoint.
+    cached = read_json_cache(_CACHE_NAME, max_age_s=900)
     if cached is not None:
         return cached
+
+    # A prior 429 told us to back off — honor it instead of re-triggering it.
+    remaining = cooldown_remaining(_CACHE_NAME)
+    if remaining > 0:
+        stale = read_json_cache_stale(_CACHE_NAME)
+        if stale is not None:
+            return stale
+        raise RuntimeError(
+            f"Rate limited — retrying in ~{int(remaining // 60) + 1} min"
+        )
 
     headers = {
         "Authorization": f"Bearer {token}",
@@ -496,12 +508,17 @@ def _fetch_oauth_usage_cached(token: str) -> dict[str, Any]:
         if resp.status_code == 404:
             raise RuntimeError("OAuth usage not available for this account")
         if resp.status_code == 429:
+            retry_after = safe_float(resp.headers.get("retry-after")) or 1800.0
+            write_cooldown(_CACHE_NAME, retry_after + 30.0)
             stale = read_json_cache_stale(_CACHE_NAME)
             if stale is not None:
                 return stale
-            raise RuntimeError("Rate limited (429) — try again in a few minutes")
+            raise RuntimeError(
+                f"Rate limited (429) — backing off {int(retry_after // 60) + 1} min"
+            )
         resp.raise_for_status()
         body = resp.json()
         if isinstance(body, dict):
             write_json_cache(_CACHE_NAME, body)
+        clear_cooldown(_CACHE_NAME)
         return body

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tempfile
 import threading
@@ -48,6 +49,7 @@ def _save_prefs(prefs: dict) -> None:
     PREFS_PATH.parent.mkdir(parents=True, exist_ok=True)
     try:
         PREFS_PATH.write_text(json.dumps(prefs, indent=2), encoding="utf-8")
+        os.chmod(PREFS_PATH, 0o600)
     except OSError:
         pass
 
@@ -180,8 +182,8 @@ def run_menubar() -> None:
         import rumps  # type: ignore
     except ImportError as exc:
         raise SystemExit(
-            "Menu bar requires 'rumps'. Install with:\n"
-            "  uv tool install --force -e ~/personal/tool/llm-usage\n"
+            "Menu bar requires 'rumps' (macOS only). Reinstall from the repo root:\n"
+            "  uv tool install --force -e .\n"
             f"({exc})"
         ) from exc
 
