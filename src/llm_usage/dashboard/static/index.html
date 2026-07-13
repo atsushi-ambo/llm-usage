@@ -20,6 +20,7 @@
       --grok: #a78bfa;
       --cursor: #60a5fa;
       --gemini: #fbbf24;
+      --codex: #22c55e;
     }
     * { box-sizing: border-box; }
     body {
@@ -47,7 +48,7 @@
       letter-spacing: -0.02em;
     }
     h1 span { color: var(--accent); }
-    .controls { display: flex; gap: .75rem; align-items: center; }
+    .controls { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; }
     select, button {
       background: var(--panel);
       color: var(--text);
@@ -63,24 +64,37 @@
     }
     button:hover { filter: brightness(1.08); }
     main { padding: 1.5rem; max-width: 1200px; margin: 0 auto; }
+    .section-title {
+      color: var(--muted);
+      font-size: .78rem;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      margin: 0 0 .75rem;
+    }
     .summary {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
       gap: 1rem;
       margin-bottom: 1.5rem;
+    }
+    .quota-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1.75rem;
     }
     .card {
       background: var(--panel);
       border: 1px solid var(--border);
       border-radius: 14px;
-      padding: 1rem 1.1rem;
+      padding: 1rem 1.15rem;
     }
     .card .label { color: var(--muted); font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; }
     .card .value { font-size: 1.55rem; font-weight: 650; margin-top: .35rem; letter-spacing: -0.03em; }
     .card .sub { color: var(--muted); font-size: .8rem; margin-top: .25rem; }
     .providers {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
       gap: 1rem;
     }
     .provider { position: relative; overflow: hidden; }
@@ -93,7 +107,7 @@
     }
     .provider.claude::before { background: var(--claude); }
     .provider.openai::before { background: var(--openai); }
-    .provider.codex::before { background: #22c55e; }
+    .provider.codex::before { background: var(--codex); }
     .provider.grok::before { background: var(--grok); }
     .provider.cursor::before { background: var(--cursor); }
     .provider.gemini::before { background: var(--gemini); }
@@ -112,6 +126,7 @@
       border: 1px solid var(--border);
       color: var(--muted);
       font-weight: 500;
+      white-space: nowrap;
     }
     .badge.api { color: var(--green); border-color: #245c42; }
     .badge.local_logs { color: var(--accent); border-color: #2a4a74; }
@@ -125,25 +140,79 @@
       font-size: .9rem;
     }
     .metrics div span { display: block; color: var(--muted); font-size: .72rem; }
+
+    /* ── Quota bars (Grok-settings style) ───────────────────── */
+    .quota-block {
+      margin: .85rem 0 1rem;
+      padding: .85rem 1rem;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+    }
+    .quota-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: .75rem;
+      margin-bottom: .55rem;
+      flex-wrap: wrap;
+    }
+    .quota-pct {
+      font-size: 1.45rem;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      line-height: 1.1;
+    }
+    .quota-pct small {
+      font-size: .85rem;
+      font-weight: 500;
+      color: var(--muted);
+      margin-left: .25rem;
+    }
+    .quota-reset {
+      color: var(--muted);
+      font-size: .8rem;
+      text-align: right;
+    }
+    .quota-track {
+      height: 12px;
+      background: #1a2433;
+      border-radius: 99px;
+      overflow: hidden;
+      position: relative;
+    }
+    .quota-fill {
+      display: block;
+      height: 100%;
+      border-radius: 99px;
+      transition: width .35s ease;
+      min-width: 0;
+    }
+    .quota-meta {
+      display: flex;
+      justify-content: space-between;
+      gap: .5rem;
+      margin-top: .55rem;
+      font-size: .78rem;
+      color: var(--muted);
+      flex-wrap: wrap;
+    }
+    .quota-meta strong { color: var(--text); font-weight: 600; }
+    .quota-ok { color: var(--green); }
+    .quota-warn { color: var(--yellow); }
+    .quota-hot { color: var(--red); }
+
     .models { margin-top: .5rem; }
     .models table { width: 100%; border-collapse: collapse; font-size: .8rem; }
     .models th, .models td { text-align: left; padding: .3rem 0; border-bottom: 1px solid var(--border); }
     .models th { color: var(--muted); font-weight: 500; }
     .models td:not(:first-child), .models th:not(:first-child) { text-align: right; }
     .notes { color: var(--muted); font-size: .78rem; margin-top: .65rem; line-height: 1.4; }
-    .error { color: var(--yellow); }
+    .notes .err { color: var(--yellow); }
     .empty { color: var(--muted); text-align: center; padding: 3rem 1rem; }
     footer { text-align: center; color: var(--muted); font-size: .75rem; padding: 2rem 1rem; }
-    .bar-wrap { margin-top: .75rem; }
-    .bar {
-      height: 8px;
-      background: #1a2433;
-      border-radius: 99px;
-      overflow: hidden;
-      display: flex;
-    }
-    .bar i { display: block; height: 100%; }
     #status { color: var(--muted); font-size: .8rem; }
+    a { color: var(--accent); }
   </style>
 </head>
 <body>
@@ -161,7 +230,13 @@
     </div>
   </header>
   <main>
+    <p class="section-title">Overview</p>
     <section class="summary" id="summary"></section>
+    <div id="quotas-wrap" style="display:none">
+      <p class="section-title">Subscription quotas</p>
+      <section class="quota-row" id="quotas"></section>
+    </div>
+    <p class="section-title">Providers</p>
     <section class="providers" id="providers"></section>
   </main>
   <footer>Local-only · data stays on your machine · llm-usage</footer>
@@ -191,6 +266,101 @@
       if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
       return String(n);
     }
+    function clampPct(n) {
+      const v = Number(n);
+      if (!Number.isFinite(v)) return null;
+      return Math.max(0, Math.min(100, v));
+    }
+    function pctClass(pct) {
+      if (pct >= 90) return 'quota-hot';
+      if (pct >= 70) return 'quota-warn';
+      return 'quota-ok';
+    }
+    function barColor(pct, fallback) {
+      if (pct >= 90) return 'var(--red)';
+      if (pct >= 70) return 'var(--yellow)';
+      return fallback || 'var(--accent)';
+    }
+    function fmtReset(iso) {
+      if (!iso) return null;
+      try {
+        const d = new Date(iso);
+        if (Number.isNaN(d.getTime())) return String(iso).slice(0, 10);
+        return d.toLocaleString(undefined, {
+          year: 'numeric', month: 'short', day: 'numeric',
+          hour: '2-digit', minute: '2-digit',
+        });
+      } catch {
+        return String(iso).slice(0, 16);
+      }
+    }
+
+    /** Pull a normalized quota object from provider meta (any shape). */
+    function extractQuota(p) {
+      const meta = p.meta || {};
+      if (meta.quota && meta.quota.used_percent != null) {
+        return {
+          used_percent: clampPct(meta.quota.used_percent),
+          label: meta.quota.label || 'Quota',
+          plan: meta.quota.plan || null,
+          resets_at: meta.quota.resets_at || null,
+        };
+      }
+      // Grok billing snapshot
+      const sub = meta.subscription;
+      if (sub && typeof sub === 'object') {
+        if (sub.credit_usage_percent != null) {
+          return {
+            used_percent: clampPct(sub.credit_usage_percent),
+            label: 'Weekly limit',
+            plan: sub.subscription_tier || null,
+            resets_at: (sub.period && sub.period.end) || null,
+          };
+        }
+        // Codex /wham/usage shape
+        const primary = sub.rate_limit && sub.rate_limit.primary_window;
+        if (primary && primary.used_percent != null) {
+          let resets = null;
+          if (primary.reset_at) {
+            resets = new Date(primary.reset_at * 1000).toISOString();
+          }
+          return {
+            used_percent: clampPct(primary.used_percent),
+            label: 'Usage window',
+            plan: sub.plan_type || meta.plan_type || null,
+            resets_at: resets,
+          };
+        }
+      }
+      return null;
+    }
+
+    function renderQuotaBlock(quota, color, compact) {
+      if (!quota || quota.used_percent == null) return '';
+      const pct = quota.used_percent;
+      const cls = pctClass(pct);
+      const fill = barColor(pct, color);
+      const reset = fmtReset(quota.resets_at);
+      return `
+        <div class="quota-block">
+          <div class="quota-head">
+            <div class="quota-pct ${cls}">
+              ${Math.round(pct)}%<small>used</small>
+            </div>
+            <div class="quota-reset">
+              ${quota.label || 'Quota'}${reset ? `<br>Resets ${reset}` : ''}
+            </div>
+          </div>
+          <div class="quota-track">
+            <i class="quota-fill" style="width:${pct}%;background:${fill}"></i>
+          </div>
+          <div class="quota-meta">
+            <span>${quota.plan ? `Plan: <strong>${quota.plan}</strong>` : ''}</span>
+            <span>${Math.round(100 - pct)}% remaining</span>
+          </div>
+        </div>
+      `;
+    }
 
     async function load() {
       const days = $('days').value;
@@ -204,7 +374,7 @@
           `${data.period_start} → ${data.period_end} · fetched ${new Date(data.generated_at).toLocaleTimeString()}`;
       } catch (e) {
         $('status').textContent = 'Error';
-        $('providers').innerHTML = `<div class="empty error">${e.message}</div>`;
+        $('providers').innerHTML = `<div class="empty" style="color:var(--yellow)">${e.message}</div>`;
       }
     }
 
@@ -214,9 +384,30 @@
         .filter(v => v != null)
         .reduce((a, b) => a + b, 0);
       const hasCost = data.providers.some(p => p.cost_usd != null);
-      const totalTok = data.providers.reduce((a, p) => a + (p.input_tokens||0) + (p.output_tokens||0) + (p.cache_read_tokens||0) + (p.cache_write_tokens||0), 0);
+      const totalTok = data.providers.reduce(
+        (a, p) => a + (p.input_tokens||0) + (p.output_tokens||0)
+          + (p.cache_read_tokens||0) + (p.cache_write_tokens||0), 0
+      );
       const totalReq = data.providers.reduce((a, p) => a + (p.requests||0), 0);
       const active = data.providers.filter(p => p.source !== 'unavailable').length;
+
+      // Top subscription quota cards
+      const withQuota = data.providers
+        .map(p => ({ p, q: extractQuota(p) }))
+        .filter(x => x.q);
+
+      if (withQuota.length) {
+        $('quotas-wrap').style.display = '';
+        $('quotas').innerHTML = withQuota.map(({ p, q }) => `
+          <div class="card">
+            <div class="label">${p.display_name}</div>
+            ${renderQuotaBlock(q, COLORS[p.provider])}
+          </div>
+        `).join('');
+      } else {
+        $('quotas-wrap').style.display = 'none';
+        $('quotas').innerHTML = '';
+      }
 
       $('summary').innerHTML = `
         <div class="card"><div class="label">Combined cost</div><div class="value">${hasCost ? fmtCost(totalCost) : '—'}</div><div class="sub">where known</div></div>
@@ -225,12 +416,9 @@
         <div class="card"><div class="label">Active sources</div><div class="value">${active}/${data.providers.length}</div><div class="sub">configured or local</div></div>
       `;
 
-      // cost share bar
-      const costs = data.providers.map(p => ({ id: p.provider, cost: p.cost_usd || 0 }));
-      const sum = costs.reduce((a, c) => a + c.cost, 0) || 1;
-
       $('providers').innerHTML = data.providers.map(p => {
         const est = p.meta && p.meta.estimated;
+        const quota = extractQuota(p);
         const models = (p.models || []).slice(0, 8);
         const modelRows = models.map(m => `
           <tr>
@@ -240,30 +428,41 @@
             <td>${fmtTok(m.output_tokens)}</td>
             <td>${m.cost_usd != null ? fmtCost(m.cost_usd, est) : '—'}</td>
           </tr>`).join('');
+
+        // Prefer short notes; hide long HTTP error dumps
+        const shortNotes = (p.notes || []).filter(n => n.length < 180).slice(0, 2);
+        const shortErrs = (p.errors || []).map(e => {
+          if (e.includes('429')) return 'Quota/rate-limit probe returned 429 (try later)';
+          if (e.includes('401')) return 'Auth rejected — re-login';
+          return e.length > 120 ? e.slice(0, 117) + '…' : e;
+        });
         const notes = [
-          ...(p.notes || []).slice(0, 2),
-          ...(p.errors || []).map(e => '⚠ ' + e),
-        ].map(n => `<div>${n}</div>`).join('');
-        const share = sum > 0 && p.cost_usd ? Math.round((p.cost_usd / sum) * 100) : 0;
+          ...shortNotes,
+          ...shortErrs.map(e => e),
+        ].map(n => {
+          const isErr = shortErrs.includes(n) || n.startsWith('⚠');
+          return `<div class="${isErr ? 'err' : ''}">${isErr && !n.startsWith('⚠') ? '⚠ ' : ''}${n}</div>`;
+        }).join('');
+
         return `
           <article class="card provider ${p.provider}">
             <h2>
               <span>${p.display_name}</span>
               <span class="badge ${p.source}">${p.source}</span>
             </h2>
+            ${quota ? renderQuotaBlock(quota, COLORS[p.provider]) : ''}
             <div class="metrics">
               <div><span>Cost</span><strong>${fmtCost(p.cost_usd, est)}</strong></div>
               <div><span>Requests</span><strong>${fmtNum(p.requests)}</strong></div>
               <div><span>Input</span><strong>${fmtTok(p.input_tokens)}</strong></div>
               <div><span>Output</span><strong>${fmtTok(p.output_tokens)}</strong></div>
             </div>
-            ${p.cost_usd ? `<div class="bar-wrap"><div class="bar"><i style="width:${share}%;background:${COLORS[p.provider]||'#5b9dff'}"></i></div><div class="sub" style="margin-top:.35rem">${share}% of known cost</div></div>` : ''}
             ${models.length ? `<div class="models"><table>
               <thead><tr><th>Model</th><th>Req</th><th>In</th><th>Out</th><th>$</th></tr></thead>
               <tbody>${modelRows}</tbody>
             </table></div>` : ''}
             ${notes ? `<div class="notes">${notes}</div>` : ''}
-            ${p.meta && p.meta.console_url ? `<div class="notes"><a style="color:var(--accent)" href="${p.meta.console_url}" target="_blank" rel="noopener">Open console ↗</a></div>` : ''}
+            ${p.meta && p.meta.console_url ? `<div class="notes"><a href="${p.meta.console_url}" target="_blank" rel="noopener">Open console ↗</a></div>` : ''}
           </article>
         `;
       }).join('');
