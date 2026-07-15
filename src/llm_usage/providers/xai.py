@@ -1,10 +1,10 @@
-"""Grok / xAI — Grok Build (X Premium) local logs + optional API keys."""
+"""Grok / xAI — live weekly credits + Grok Build local logs."""
 
 from __future__ import annotations
 
 import json
 from collections import defaultdict
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +21,8 @@ from llm_usage.models import (
 )
 from llm_usage.providers.base import parse_iso_date, safe_error_str, safe_float, safe_int
 
+_BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits"
+
 
 def collect_xai(settings: Settings, start: date, end: date) -> ProviderReport:
     report = ProviderReport(
@@ -30,15 +32,22 @@ def collect_xai(settings: Settings, start: date, end: date) -> ProviderReport:
         period_start=start,
         period_end=end,
         meta={
-            "console_url": "https://console.x.ai/team/default/usage",
-            "billing_url": "https://console.x.ai/team/default/billing",
+            "console_url": "https://grok.com",
+            "billing_url": "https://grok.com",  # Settings → 使用量
             "grok_build": "https://x.ai/news/grok-build-cli",
         },
     )
 
-    # 1) Grok Build local inference logs (best source for X Premium users)
+    # 1) Live weekly credits (same source as Grok settings) — never use stale logs for %
+    live_billing: dict[str, Any] | None = None
+    try:
+        live_billing = _fetch_live_credits(settings.grok_home_dir)
+    except Exception as exc:  # noqa: BLE001
+        report.errors.append(f"Live Grok billing: {exc}")
+
+    # 2) Local inference logs for token totals (still useful history)
     build = _scan_grok_build(settings.grok_home_dir, start, end)
-    if build["requests"] > 0 or build.get("billing"):
+    if build["requests"] > 0:
         report.source = SourceKind.LOCAL_LOGS
         report.input_tokens = build["input_tokens"]
         report.output_tokens = build["output_tokens"]
@@ -47,36 +56,37 @@ def collect_xai(settings: Settings, start: date, end: date) -> ProviderReport:
         report.models = build["models"]
         report.daily = build["daily"]
         report.meta["sessions"] = build.get("sessions")
-        report.meta["subscription"] = build.get("billing")
-        # Subscription-included: no $ invoice for normal X Premium usage
         report.cost_usd = None
-        if build.get("billing"):
-            b = build["billing"]
-            tier = b.get("subscription_tier") or "X Premium"
-            pct = b.get("credit_usage_percent")
-            period = b.get("period") or {}
-            # Normalized quota for dashboard progress bars
-            if pct is not None:
-                report.meta["quota"] = {
-                    "used_percent": float(pct),
-                    "label": "Weekly limit",
-                    "plan": tier,
-                    "resets_at": period.get("end"),
-                    "period_start": period.get("start"),
-                    "period_type": period.get("type") or "weekly",
-                }
-            note = f"Grok Build · plan={tier}"
-            if pct is not None:
-                note += f" · weekly quota ~{pct:.0f}% used"
-            if period.get("start") and period.get("end"):
-                note += f" ({period['start'][:10]} → {period['end'][:10]})"
-            report.notes.append(note)
         report.notes.append(
             "Token totals from ~/.grok/logs/unified.jsonl "
             "(inference_done events in range)."
         )
 
-    # 2) Session summaries as backup activity counts
+    # Prefer live billing for quota %; fall back to log only if period still active
+    billing = live_billing
+    billing_source = "live"
+    if billing is None:
+        log_billing = build.get("billing")
+        if log_billing and not _period_ended(log_billing.get("period") or {}):
+            billing = log_billing
+            billing_source = "local_logs"
+        elif log_billing and _period_ended(log_billing.get("period") or {}):
+            report.notes.append(
+                "Local Grok billing snapshot is from a past weekly period "
+                f"(ended {(log_billing.get('period') or {}).get('end', '?')[:10]}); "
+                "quota % hidden until live fetch works — open Grok Build once or "
+                "run `grok login`."
+            )
+            report.meta["stale_billing"] = log_billing
+
+    if billing:
+        report.meta["subscription"] = billing
+        report.meta["billing_source"] = billing_source
+        _apply_billing_quota(report, billing, source=billing_source)
+        if report.source == SourceKind.UNAVAILABLE:
+            report.source = SourceKind.API if billing_source == "live" else SourceKind.LOCAL_LOGS
+
+    # 3) Session summaries as backup activity counts
     sess = _scan_session_summaries(settings.grok_home_dir / "sessions", start, end)
     if sess["session_count"]:
         report.meta["session_summaries"] = sess
@@ -91,7 +101,7 @@ def collect_xai(settings: Settings, start: date, end: date) -> ProviderReport:
                 "open sessions for activity (no per-token log yet in range)."
             )
 
-    # 3) Optional platform API key (pay-as-you-go, separate from X Premium)
+    # 4) Optional platform API key (pay-as-you-go, separate from X Premium)
     if settings.xai_api_key:
         try:
             models = _list_models(settings.xai_api_key)
@@ -122,6 +132,130 @@ def collect_xai(settings: Settings, start: date, end: date) -> ProviderReport:
         )
 
     return report
+
+
+def _period_ended(period: dict[str, Any]) -> bool:
+    end_raw = period.get("end")
+    if not end_raw:
+        return False
+    try:
+        end_dt = datetime.fromisoformat(str(end_raw).replace("Z", "+00:00"))
+        if end_dt.tzinfo is None:
+            end_dt = end_dt.replace(tzinfo=timezone.utc)
+        return datetime.now(timezone.utc) >= end_dt
+    except ValueError:
+        return False
+
+
+def _apply_billing_quota(
+    report: ProviderReport, billing: dict[str, Any], *, source: str
+) -> None:
+    tier = billing.get("subscription_tier") or "X Premium"
+    pct = billing.get("credit_usage_percent")
+    period = billing.get("period") or {}
+    products = billing.get("product_usage") or []
+
+    windows: list[dict[str, Any]] = []
+    for prod in products:
+        if not isinstance(prod, dict):
+            continue
+        name = str(prod.get("product") or prod.get("name") or "product")
+        up = safe_float(prod.get("usagePercent") or prod.get("usage_percent"))
+        if up is None:
+            continue
+        windows.append(
+            {
+                "key": name.lower(),
+                "label": name,
+                "used_percent": max(0.0, min(100.0, float(up))),
+            }
+        )
+
+    if pct is not None:
+        report.meta["quota"] = {
+            "used_percent": float(pct),
+            "label": "Weekly limit",
+            "plan": tier,
+            "resets_at": period.get("end"),
+            "period_start": period.get("start"),
+            "period_type": period.get("type") or "weekly",
+            "windows": windows,
+            "source": source,
+        }
+    note = f"Grok Build · plan={tier}"
+    if pct is not None:
+        note += f" · weekly quota ~{pct:.0f}% used"
+    if period.get("start") and period.get("end"):
+        note += f" ({str(period['start'])[:10]} → {str(period['end'])[:10]})"
+    if source == "live":
+        note += " · live"
+    report.notes.insert(0, note)
+
+
+def _read_grok_auth_token(home: Path) -> str | None:
+    path = home / "auth.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    # Prefer newest-looking entry with a key
+    for _k, entry in data.items():
+        if isinstance(entry, dict):
+            tok = entry.get("key") or entry.get("access_token") or entry.get("accessToken")
+            if tok:
+                return str(tok)
+    return None
+
+
+def _fetch_live_credits(home: Path) -> dict[str, Any] | None:
+    """Live weekly credits from cli-chat-proxy (same as Grok Build / settings)."""
+    token = _read_grok_auth_token(home)
+    if not token:
+        raise RuntimeError("No Grok auth token in ~/.grok/auth.json — run `grok login`")
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+        "User-Agent": "llm-usage/0.1.0",
+        "x-grok-client-version": "0.2.99",
+        "x-grok-client-mode": "cli",
+    }
+    with httpx.Client(timeout=20.0, follow_redirects=True) as client:
+        resp = client.get(_BILLING_URL, headers=headers)
+        if resp.status_code in (401, 403):
+            raise RuntimeError(
+                f"Grok auth rejected ({resp.status_code}) — run `grok login` again"
+            )
+        resp.raise_for_status()
+        body = resp.json()
+
+    cfg = body.get("config") if isinstance(body, dict) else None
+    if not isinstance(cfg, dict):
+        raise RuntimeError("Unexpected billing response shape")
+
+    period = cfg.get("currentPeriod") or {}
+    products = cfg.get("productUsage") or cfg.get("product_usage") or []
+    return {
+        "subscription_tier": body.get("subscriptionTier")
+        or cfg.get("subscriptionTier")
+        or "X Premium",
+        "credit_usage_percent": safe_float(cfg.get("creditUsagePercent")),
+        "period": {
+            "type": period.get("type"),
+            "start": period.get("start"),
+            "end": period.get("end"),
+        },
+        "on_demand_used": (cfg.get("onDemandUsed") or {}).get("val"),
+        "on_demand_cap": (cfg.get("onDemandCap") or {}).get("val"),
+        "prepaid_balance": (cfg.get("prepaidBalance") or {}).get("val"),
+        "product_usage": products if isinstance(products, list) else [],
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "live": True,
+    }
 
 
 def _scan_grok_build(home: Path, start: date, end: date) -> dict[str, Any]:
@@ -260,9 +394,11 @@ def _parse_grok_build_file(path: Path) -> dict[str, Any]:
                 msg = row.get("msg") or ""
 
                 if msg == "billing: fetched credits config":
+                    # Fallback only — live API is preferred (logs go stale after weekly reset)
                     ctx = row.get("ctx") or {}
                     cfg = ctx.get("config") or {}
                     period = cfg.get("currentPeriod") or {}
+                    products = cfg.get("productUsage") or []
                     latest_billing = {
                         "subscription_tier": ctx.get("subscriptionTier"),
                         "credit_usage_percent": safe_float(cfg.get("creditUsagePercent")),
@@ -274,7 +410,9 @@ def _parse_grok_build_file(path: Path) -> dict[str, Any]:
                         "on_demand_used": (cfg.get("onDemandUsed") or {}).get("val"),
                         "on_demand_cap": (cfg.get("onDemandCap") or {}).get("val"),
                         "prepaid_balance": (cfg.get("prepaidBalance") or {}).get("val"),
+                        "product_usage": products if isinstance(products, list) else [],
                         "fetched_at": row.get("ts"),
+                        "live": False,
                     }
                     continue
 
