@@ -78,8 +78,18 @@ def collect_claude(settings: Settings, start: date, end: date) -> ProviderReport
                 report.daily = local["daily"]
 
     # 3) Subscription / rate-limit quota (claude.ai / Claude Code OAuth)
-    oauth_token = _read_claude_oauth_token(settings.claude_credentials_path)
+    # Prefer macOS Keychain — ~/.claude/.credentials.json is often stale.
+    oauth_token = cred_meta.get("access_token") or _read_claude_oauth_token(
+        settings.claude_credentials_path
+    )
     if oauth_token:
+        if cred_meta.get("source"):
+            report.meta["auth_source"] = cred_meta["source"]
+        if not _token_still_valid(cred_meta):
+            report.notes.append(
+                "Claude OAuth token looks expired — open Claude Code once to refresh, "
+                "or run `claude` login."
+            )
         try:
             usage = _fetch_oauth_usage_cached(oauth_token)
             report.meta["subscription"] = usage
@@ -92,6 +102,8 @@ def collect_claude(settings: Settings, start: date, end: date) -> ProviderReport
                     report.source = SourceKind.SUBSCRIPTION
                 note = f"Claude Code · plan={q.get('plan')}"
                 note += f" · {q.get('label', 'quota')} {q['used_percent']:.0f}% used"
+                if cred_meta.get("source") == "keychain":
+                    note += " · live"
                 report.notes.append(note)
                 for w in q.get("windows") or []:
                     if w.get("key") != "seven_day" and w.get("used_percent") is not None:
@@ -482,35 +494,115 @@ def _read_claude_oauth_token(path: Path) -> str | None:
     return meta.get("access_token")
 
 
-def _read_claude_cred_meta(path: Path) -> dict[str, Any]:
-    out: dict[str, Any] = {}
+def _oauth_block_to_meta(block: dict[str, Any], *, source: str) -> dict[str, Any]:
+    out: dict[str, Any] = {"source": source}
+    token = block.get("accessToken") or block.get("access_token")
+    if token:
+        out["access_token"] = str(token)
+    if block.get("subscriptionType"):
+        out["plan"] = str(block["subscriptionType"])
+    if block.get("rateLimitTier"):
+        out["rate_limit_tier"] = str(block["rateLimitTier"])
+    exp = block.get("expiresAt") or block.get("expires_at")
+    if isinstance(exp, (int, float)):
+        # Claude stores ms since epoch
+        out["expires_at"] = float(exp) / 1000.0 if exp > 1e12 else float(exp)
+    return out
+
+
+def _read_claude_keychain_oauth() -> dict[str, Any] | None:
+    """macOS: Claude Code stores the live OAuth blob in Keychain (file can be stale)."""
+    import platform
+    import subprocess
+
+    if platform.system() != "Darwin":
+        return None
+    try:
+        proc = subprocess.run(
+            [
+                "security",
+                "find-generic-password",
+                "-s",
+                "Claude Code-credentials",
+                "-w",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    raw = (proc.stdout or "").strip()
+    if proc.returncode != 0 or not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    block = data.get("claudeAiOauth") if isinstance(data, dict) else None
+    if isinstance(block, dict) and (block.get("accessToken") or block.get("access_token")):
+        return block
+    if isinstance(data, dict) and (data.get("accessToken") or data.get("access_token")):
+        return data
+    return None
+
+
+def _read_claude_file_oauth(path: Path) -> dict[str, Any] | None:
     if not path.exists():
-        return out
+        return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return out
-    block = data.get("claudeAiOauth") if isinstance(data, dict) else None
+        return None
+    if not isinstance(data, dict):
+        return None
+    block = data.get("claudeAiOauth")
     if isinstance(block, dict):
-        if block.get("accessToken") or block.get("access_token"):
-            out["access_token"] = str(block.get("accessToken") or block.get("access_token"))
-        if block.get("subscriptionType"):
-            out["plan"] = str(block["subscriptionType"])
-        if block.get("rateLimitTier"):
-            out["rate_limit_tier"] = str(block["rateLimitTier"])
-        return out
-    for key in ("oauth", "accessToken", "access_token"):
-        if key in data:
-            val = data[key]
-            if isinstance(val, str) and val:
-                out["access_token"] = val
-            elif isinstance(val, dict):
-                token = val.get("accessToken") or val.get("access_token")
-                if token:
-                    out["access_token"] = str(token)
-                if val.get("subscriptionType"):
-                    out["plan"] = str(val["subscriptionType"])
-    return out
+        return block
+    for key in ("oauth",):
+        val = data.get(key)
+        if isinstance(val, dict):
+            return val
+    if data.get("accessToken") or data.get("access_token"):
+        return data
+    return None
+
+
+def _token_still_valid(meta: dict[str, Any], *, skew_s: float = 120.0) -> bool:
+    exp = meta.get("expires_at")
+    if not isinstance(exp, (int, float)):
+        # No expiry info — assume usable and let the API decide
+        return bool(meta.get("access_token"))
+    import time
+
+    return float(exp) > time.time() + skew_s
+
+
+def _read_claude_cred_meta(path: Path) -> dict[str, Any]:
+    """Prefer Keychain (fresh) over ~/.claude/.credentials.json (often stale)."""
+    candidates: list[dict[str, Any]] = []
+
+    kc = _read_claude_keychain_oauth()
+    if kc:
+        candidates.append(_oauth_block_to_meta(kc, source="keychain"))
+
+    fb = _read_claude_file_oauth(path)
+    if fb:
+        candidates.append(_oauth_block_to_meta(fb, source="file"))
+
+    if not candidates:
+        return {}
+
+    # Prefer a non-expired token; keychain usually wins
+    for c in candidates:
+        if c.get("access_token") and _token_still_valid(c):
+            return c
+    # Fall back to whatever has a token
+    for c in candidates:
+        if c.get("access_token"):
+            return c
+    return candidates[0]
 
 
 def _fetch_oauth_usage_cached(token: str) -> dict[str, Any]:
