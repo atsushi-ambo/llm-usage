@@ -11,6 +11,7 @@ from typing import Any
 import httpx
 
 from llm_usage.config import Settings
+from llm_usage.logcache import scan_with_cache
 from llm_usage.models import (
     DailyPoint,
     ModelUsage,
@@ -168,80 +169,42 @@ def _scan_grok_build(home: Path, start: date, end: date) -> dict[str, Any]:
         except (OSError, json.JSONDecodeError):
             continue
 
-    latest_billing: dict[str, Any] | None = None
+    # sid -> model resolution happens here (not inside the cached parse)
+    # since session_model is loaded fresh from separate summary.json files
+    # every call; baking the model into the cache would let it go stale if
+    # a summary is written/updated after its inference was logged.
+    parsed = scan_with_cache("grok", log_path, _parse_grok_build_file)
+    latest_billing = parsed.get("billing")
 
-    try:
-        with log_path.open("r", encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    row = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
+    for rec in parsed.get("records", []):
+        day = date.fromisoformat(rec["day"])
+        if day < start or day > end:
+            continue
+        inp, out, cache_r = rec["input_tokens"], rec["output_tokens"], rec["cache_read_tokens"]
 
-                msg = row.get("msg") or ""
-                day = parse_iso_date(row.get("ts"))
+        sid = rec["sid"]
+        if sid:
+            session_ids.add(sid)
+        # Don't guess a specific version when we can't map the session to a
+        # model — it would misattribute tokens/cost to whatever "grok-4.5"
+        # happens to price at.
+        model = session_model.get(sid) or "grok (unknown)"
 
-                if msg == "billing: fetched credits config":
-                    ctx = row.get("ctx") or {}
-                    cfg = ctx.get("config") or {}
-                    period = cfg.get("currentPeriod") or {}
-                    latest_billing = {
-                        "subscription_tier": ctx.get("subscriptionTier"),
-                        "credit_usage_percent": safe_float(cfg.get("creditUsagePercent")),
-                        "period": {
-                            "type": period.get("type"),
-                            "start": period.get("start"),
-                            "end": period.get("end"),
-                        },
-                        "on_demand_used": (cfg.get("onDemandUsed") or {}).get("val"),
-                        "on_demand_cap": (cfg.get("onDemandCap") or {}).get("val"),
-                        "prepaid_balance": (cfg.get("prepaidBalance") or {}).get("val"),
-                        "fetched_at": row.get("ts"),
-                    }
-                    continue
+        m = by_model[model]
+        m["input_tokens"] += inp
+        m["output_tokens"] += out
+        m["cache_read_tokens"] += cache_r
+        m["requests"] += 1
 
-                if msg != "shell.turn.inference_done":
-                    continue
-                if day is None or day < start or day > end:
-                    continue
+        d = by_day[day]
+        d["input_tokens"] += inp
+        d["output_tokens"] += out
+        d["requests"] += 1
 
-                ctx = row.get("ctx") or {}
-                inp = safe_int(ctx.get("prompt_tokens"))
-                cache_r = safe_int(ctx.get("cached_prompt_tokens"))
-                # completion_tokens is the main output counter; reasoning is often
-                # a subset of the same stream, so don't add them together.
-                out = safe_int(ctx.get("completion_tokens"))
-                if not any((inp, out, cache_r)):
-                    continue
-
-                sid = str(row.get("sid") or "")
-                if sid:
-                    session_ids.add(sid)
-                # Don't guess a specific version when we can't map the
-                # session to a model — it would misattribute tokens/cost to
-                # whatever "grok-4.5" happens to price at.
-                model = session_model.get(sid) or "grok (unknown)"
-
-                m = by_model[model]
-                m["input_tokens"] += inp
-                m["output_tokens"] += out
-                m["cache_read_tokens"] += cache_r
-                m["requests"] += 1
-
-                d = by_day[day]
-                d["input_tokens"] += inp
-                d["output_tokens"] += out
-                d["requests"] += 1
-
-                totals["input_tokens"] += inp
-                totals["output_tokens"] += out
-                totals["cache_read_tokens"] += cache_r
-                totals["requests"] += 1
-    except OSError:
-        return empty
+        totals["input_tokens"] += inp
+        totals["output_tokens"] += out
+        totals["cache_read_tokens"] += cache_r
+        totals["requests"] += 1
 
     models = [
         ModelUsage(
@@ -271,6 +234,77 @@ def _scan_grok_build(home: Path, start: date, end: date) -> dict[str, Any]:
         "sessions": len(session_ids),
         "billing": latest_billing,
     }
+
+
+def _parse_grok_build_file(path: Path) -> dict[str, Any]:
+    """Whole-file parse (no date filtering) so the cached result stays
+    valid across different --days windows; see llm_usage.logcache.
+
+    Model attribution (sid -> model) deliberately isn't resolved here —
+    see the caller, which does that from freshly-loaded session summaries
+    on every call instead of baking it into this file-level cache.
+    """
+    records: list[dict[str, Any]] = []
+    latest_billing: dict[str, Any] | None = None
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                msg = row.get("msg") or ""
+
+                if msg == "billing: fetched credits config":
+                    ctx = row.get("ctx") or {}
+                    cfg = ctx.get("config") or {}
+                    period = cfg.get("currentPeriod") or {}
+                    latest_billing = {
+                        "subscription_tier": ctx.get("subscriptionTier"),
+                        "credit_usage_percent": safe_float(cfg.get("creditUsagePercent")),
+                        "period": {
+                            "type": period.get("type"),
+                            "start": period.get("start"),
+                            "end": period.get("end"),
+                        },
+                        "on_demand_used": (cfg.get("onDemandUsed") or {}).get("val"),
+                        "on_demand_cap": (cfg.get("onDemandCap") or {}).get("val"),
+                        "prepaid_balance": (cfg.get("prepaidBalance") or {}).get("val"),
+                        "fetched_at": row.get("ts"),
+                    }
+                    continue
+
+                if msg != "shell.turn.inference_done":
+                    continue
+                day = parse_iso_date(row.get("ts"))
+                if day is None:
+                    continue
+
+                ctx = row.get("ctx") or {}
+                inp = safe_int(ctx.get("prompt_tokens"))
+                cache_r = safe_int(ctx.get("cached_prompt_tokens"))
+                # completion_tokens is the main output counter; reasoning is often
+                # a subset of the same stream, so don't add them together.
+                out = safe_int(ctx.get("completion_tokens"))
+                if not any((inp, out, cache_r)):
+                    continue
+
+                records.append(
+                    {
+                        "day": day.isoformat(),
+                        "sid": str(row.get("sid") or ""),
+                        "input_tokens": inp,
+                        "output_tokens": out,
+                        "cache_read_tokens": cache_r,
+                    }
+                )
+    except OSError:
+        pass
+    return {"records": records, "billing": latest_billing}
 
 
 def _scan_session_summaries(root: Path, start: date, end: date) -> dict[str, Any]:

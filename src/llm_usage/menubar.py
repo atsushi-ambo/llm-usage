@@ -13,7 +13,7 @@ from pathlib import Path
 
 from llm_usage.config import load_settings
 from llm_usage.models import AggregateReport, ProviderReport
-from llm_usage.providers import collect_all
+from llm_usage.providers import collect_all_cached
 from llm_usage.quota import atomic_write_json
 
 REFRESH_SECONDS = 120
@@ -436,7 +436,9 @@ def run_menubar() -> None:
 
         def _refresh(_=None) -> None:
             app.title = " …"
-            threading.Thread(target=do_collect, daemon=True).start()
+            threading.Thread(
+                target=lambda: do_collect(force_refresh=True), daemon=True
+            ).start()
 
         def _quit(_=None) -> None:
             rumps.quit_application()
@@ -450,22 +452,54 @@ def run_menubar() -> None:
         app.menu.add(quit_item)
         callbacks.extend([open_dash, refresh_item, quit_item])
 
-    def do_collect() -> None:
+    # AppKit (app.title/app.icon/app.menu) is not safe to touch from a
+    # background thread. do_collect() runs there and only does blocking I/O
+    # (collect_all hits real provider APIs); it hands the result off via
+    # `pending` instead of mutating the UI directly. A rumps.Timer — which
+    # fires on the main thread as part of the NSApplication run loop — picks
+    # the result up and is the only place that mutates AppKit state.
+    pending_lock = threading.Lock()
+    pending: dict = {"report": None, "error": None, "ready": False}
+
+    def do_collect(*, force_refresh: bool = False) -> None:
         if state["updating"]:
             return
         state["updating"] = True
         try:
-            report = collect_all(settings, days=settings.days)
+            # The disk-backed snapshot (see collect_all_cached) is shared
+            # with the CLI and dashboard: a poll landing right after either
+            # of those reuses their result instead of re-hitting every
+            # provider API. "Refresh Now" forces a fresh collection.
+            report = collect_all_cached(
+                settings, days=settings.days, force_refresh=force_refresh
+            )
+            with pending_lock:
+                pending["report"] = report
+                pending["error"] = None
+                pending["ready"] = True
+        except Exception as exc:  # noqa: BLE001
+            with pending_lock:
+                pending["error"] = str(exc)
+                pending["ready"] = True
+        finally:
+            state["updating"] = False
+
+    def _apply_pending_update(_timer=None) -> None:
+        with pending_lock:
+            if not pending["ready"]:
+                return
+            report, error = pending["report"], pending["error"]
+            pending["ready"] = False
+
+        if error is not None:
+            state["error"] = error
+            app.title = " AI!"
+            rebuild_menu(state.get("report"), error=error)
+        else:
             state["report"] = report
             state["error"] = None
             _apply_status(app, report, state["focus"])
             rebuild_menu(report)
-        except Exception as exc:  # noqa: BLE001
-            state["error"] = str(exc)
-            app.title = " AI!"
-            rebuild_menu(state.get("report"), error=str(exc))
-        finally:
-            state["updating"] = False
 
     def background_loop() -> None:
         while True:
@@ -474,4 +508,5 @@ def run_menubar() -> None:
 
     rebuild_menu(None)
     threading.Thread(target=background_loop, daemon=True).start()
+    rumps.Timer(_apply_pending_update, 1).start()
     app.run()

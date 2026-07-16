@@ -431,11 +431,12 @@
       `;
     }
 
-    async function load() {
+    async function load(opts) {
       const days = $('days').value;
+      const refresh = opts && opts.forceRefresh ? '&refresh=1' : '';
       $('status').textContent = 'Collecting…';
       try {
-        const res = await fetch(`/api/usage?days=${days}`);
+        const res = await fetch(`/api/usage?days=${days}${refresh}`);
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
         render(data);
@@ -527,8 +528,8 @@
       }).join('');
     }
 
-    $('refresh').addEventListener('click', load);
-    $('days').addEventListener('change', load);
+    $('refresh').addEventListener('click', () => load({ forceRefresh: true }));
+    $('days').addEventListener('change', () => load());
     load();
   </script>
 </body>

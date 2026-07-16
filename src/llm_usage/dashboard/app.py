@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import secrets
-import time
 from pathlib import Path
 
 from fastapi import FastAPI, Query, Request
@@ -13,17 +12,11 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from llm_usage import __version__
 from llm_usage.config import Settings, load_settings
-from llm_usage.models import AggregateReport
-from llm_usage.providers import collect_all
+from llm_usage.providers import collect_all_cached
 from llm_usage.quota import write_dashboard_session
 from llm_usage.serialize import report_to_dict
 
 STATIC_DIR = Path(__file__).parent / "static"
-
-# How long a collected report is reused before we re-run collection (which
-# hits real provider APIs). Keeps a chatty client (menubar polling, a stray
-# webpage, several browser tabs) from tripping provider rate limits.
-REPORT_CACHE_TTL_S = 60.0
 
 COOKIE_NAME = "llm_usage_token"
 # Paths that don't need the token: health is unauthenticated so the menubar's
@@ -113,29 +106,9 @@ def _security_headers(response: Response) -> None:
     response.headers["Referrer-Policy"] = "no-referrer"
 
 
-class ReportCache:
-    """Tiny in-process TTL cache so /api/usage doesn't re-collect (and
-    re-hit every provider API) on every request."""
-
-    def __init__(self, ttl_s: float = REPORT_CACHE_TTL_S) -> None:
-        self._ttl_s = ttl_s
-        self._by_days: dict[int, tuple[float, AggregateReport]] = {}
-
-    def get(self, settings: Settings, days: int | None) -> AggregateReport:
-        key = days if days is not None else settings.days
-        cached = self._by_days.get(key)
-        now = time.monotonic()
-        if cached is not None and (now - cached[0]) < self._ttl_s:
-            return cached[1]
-        report = collect_all(settings, days=days)
-        self._by_days[key] = (now, report)
-        return report
-
-
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or load_settings()
     token = secrets.token_urlsafe(24)
-    cache = ReportCache()
 
     app = FastAPI(title="llm-usage", version=__version__)
     app.state.settings = settings
@@ -165,8 +138,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"ok": True, "version": __version__}
 
     @app.get("/api/usage")
-    def api_usage(days: int | None = Query(default=None, ge=1, le=365)) -> JSONResponse:
-        report = cache.get(app.state.settings, days)
+    def api_usage(
+        days: int | None = Query(default=None, ge=1, le=365),
+        refresh: bool = Query(default=False),
+    ) -> JSONResponse:
+        # The disk-backed snapshot (see collect_all_cached) is shared with
+        # the CLI and menubar, so a request landing right after either of
+        # those already reuses their result instead of re-hitting every
+        # provider API. ?refresh=1 (the dashboard's "Refresh" button) forces
+        # a fresh collection.
+        report = collect_all_cached(app.state.settings, days, force_refresh=refresh)
         return JSONResponse(report_to_dict(report))
 
     @app.get("/", response_class=HTMLResponse)
