@@ -118,7 +118,9 @@ llm-usage                    # summary table (last 30 days)
 llm-usage -d 7               # last 7 days
 llm-usage -p claude          # one provider
 llm-usage -f json            # machine-readable
+llm-usage --fresh            # bypass the shared snapshot cache
 llm-usage status             # which sources are configured
+llm-usage history -w 8       # weekly trend table + sparkline per provider
 llm-usage export -o out.json
 llm-usage dashboard --port 8765
 ```
