@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from enum import Enum
 from pathlib import Path
 from typing import Optional
@@ -15,6 +16,7 @@ from rich.text import Text
 
 from llm_usage import __version__
 from llm_usage.config import load_settings
+from llm_usage.history import daily_totals, sparkline, week_over_week_pct, weekly_buckets
 from llm_usage.models import AggregateReport, ProviderReport, SourceKind
 from llm_usage.providers import collect_all_cached
 from llm_usage.serialize import report_to_dict
@@ -259,6 +261,93 @@ def export_cmd(
     except OSError:
         pass
     console.print(f"[green]Wrote[/green] {output.resolve()}")
+
+
+@app.command("history")
+def history_cmd(
+    weeks: int = typer.Option(8, "--weeks", "-w", help="Number of weeks to show"),
+    provider: Optional[str] = typer.Option(None, "--provider", "-p"),
+    fresh: bool = typer.Option(
+        False,
+        "--fresh",
+        help="Bypass the shared snapshot cache and force a live collection.",
+    ),
+) -> None:
+    """Show daily/weekly usage trends per provider."""
+    settings = load_settings()
+    days = max(weeks, 1) * 7
+    with console.status("Collecting usage history…"):
+        report = collect_all_cached(settings, days=days, force_refresh=fresh)
+
+    providers = report.providers
+    if provider:
+        want = provider.lower().strip()
+        providers = [
+            p for p in providers if p.provider.value == want or want in p.display_name.lower()
+        ]
+        if not providers:
+            console.print(f"[red]No provider matching[/red] {provider!r}")
+            raise typer.Exit(1)
+
+    console.print(
+        Panel.fit(
+            f"[bold]Usage history[/bold]  "
+            f"{report.period_start.isoformat()} → {report.period_end.isoformat()}",
+            border_style="cyan",
+        )
+    )
+
+    shown_any = False
+    for p in providers:
+        if not p.daily:
+            continue
+        shown_any = True
+        _print_provider_history(p, report.period_start, report.period_end)
+
+    if not shown_any:
+        console.print(
+            "[dim]No daily history available yet for the selected provider(s). "
+            "Local-log providers (Claude, Codex, Grok, Gemini) build this up as "
+            "you use them; API-backed providers need a longer --days window.[/dim]"
+        )
+
+
+def _print_provider_history(p: ProviderReport, start: date, end: date) -> None:
+    totals = daily_totals(p.daily, start, end)
+    spark = sparkline(totals)
+
+    console.print(f"\n[bold]{p.display_name}[/bold]  {spark}")
+
+    buckets = weekly_buckets(p.daily)
+    if not buckets:
+        return
+
+    table = Table(box=box.SIMPLE, show_edge=False, pad_edge=False)
+    table.add_column("Week of")
+    table.add_column("Tokens", justify="right")
+    table.add_column("Requests", justify="right")
+    table.add_column("Cost", justify="right")
+    table.add_column("vs prior wk", justify="right")
+
+    prev_tokens: float | None = None
+    for b in buckets:
+        trend = ""
+        if prev_tokens is not None:
+            pct = week_over_week_pct(b.total_tokens, prev_tokens)
+            if pct is not None:
+                arrow = "▲" if pct > 0 else ("▼" if pct < 0 else "→")
+                color = "red" if pct > 0 else ("green" if pct < 0 else "dim")
+                trend = f"[{color}]{arrow} {abs(pct):.0f}%[/{color}]"
+        table.add_row(
+            b.week_start.isoformat(),
+            f"{b.total_tokens:,}",
+            f"{b.requests:,}",
+            f"${b.cost_usd:,.2f}" if b.cost_usd is not None else "—",
+            trend,
+        )
+        prev_tokens = b.total_tokens
+
+    console.print(table)
 
 
 def _show(

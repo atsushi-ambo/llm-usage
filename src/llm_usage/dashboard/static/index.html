@@ -196,6 +196,16 @@
     .quota-warn { color: var(--yellow); }
     .quota-hot { color: var(--red); }
 
+    .sparkline-block { margin: .7rem 0; }
+    .sparkline-label {
+      color: var(--muted);
+      font-size: .72rem;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      margin-bottom: .3rem;
+    }
+    .sparkline-svg { width: 100%; height: 28px; display: block; }
+
     .models { margin-top: .5rem; }
     .models table { width: 100%; border-collapse: collapse; font-size: .8rem; }
     .models th, .models td { text-align: left; padding: .3rem 0; border-bottom: 1px solid var(--border); }
@@ -286,6 +296,46 @@
       if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
       return String(n);
     }
+
+    /** One total-token value per day between periodStart and periodEnd
+     * (inclusive), 0 for days with no DailyPoint — mirrors
+     * llm_usage.history.daily_totals() in the CLI. */
+    function dailyTotals(daily, periodStart, periodEnd) {
+      const byDay = {};
+      (daily || []).forEach(d => {
+        const tok = (d.input_tokens || 0) + (d.output_tokens || 0)
+          + (d.cache_read_tokens || 0) + (d.cache_write_tokens || 0);
+        byDay[d.day] = (byDay[d.day] || 0) + tok;
+      });
+      const out = [];
+      const start = new Date(periodStart + 'T00:00:00Z').getTime();
+      const end = new Date(periodEnd + 'T00:00:00Z').getTime();
+      for (let t = start; t <= end; t += 86_400_000) {
+        out.push(byDay[new Date(t).toISOString().slice(0, 10)] || 0);
+      }
+      return out;
+    }
+
+    function renderSparkline(values, color) {
+      if (!values.length || !values.some(v => v > 0)) return '';
+      const max = Math.max(...values);
+      const w = 240, h = 28;
+      const slot = w / values.length;
+      const barW = Math.max(0.5, slot - 1);
+      const bars = values.map((v, i) => {
+        const bh = Math.max(1, (v / max) * h);
+        return `<rect x="${(i * slot).toFixed(1)}" y="${(h - bh).toFixed(1)}" `
+          + `width="${barW.toFixed(1)}" height="${bh.toFixed(1)}" rx="0.5"></rect>`;
+      }).join('');
+      return `
+        <div class="sparkline-block">
+          <div class="sparkline-label">Daily tokens</div>
+          <svg class="sparkline-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="fill:${color}">
+            ${bars}
+          </svg>
+        </div>`;
+    }
+
     function clampPct(n) {
       const v = Number(n);
       if (!Number.isFinite(v)) return null;
@@ -517,6 +567,10 @@
               <div><span>Input</span><strong>${fmtTok(p.input_tokens)}</strong></div>
               <div><span>Output</span><strong>${fmtTok(p.output_tokens)}</strong></div>
             </div>
+            ${renderSparkline(
+              dailyTotals(p.daily, data.period_start, data.period_end),
+              COLORS[providerClass] || 'var(--accent)'
+            )}
             ${models.length ? `<div class="models"><table>
               <thead><tr><th>Model</th><th>Req</th><th>In</th><th>Out</th><th>$</th></tr></thead>
               <tbody>${modelRows}</tbody>
