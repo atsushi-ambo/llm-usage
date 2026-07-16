@@ -11,6 +11,7 @@ from typing import Any
 import httpx
 
 from llm_usage.config import Settings
+from llm_usage.logcache import scan_with_cache
 from llm_usage.models import (
     DailyPoint,
     ModelUsage,
@@ -190,70 +191,31 @@ def _scan_sessions(root: Path, start: date, end: date) -> dict[str, Any]:
 
     for path in root.rglob("*.jsonl"):
         sessions += 1
-        current_model = "codex"
-        try:
-            with path.open("r", encoding="utf-8", errors="replace") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        row = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
+        parsed = scan_with_cache("codex", path, _parse_codex_file)
+        if parsed.get("plan_type"):
+            plan_type = parsed["plan_type"]
+        for rec in parsed.get("records", []):
+            day = date.fromisoformat(rec["day"])
+            if day < start or day > end:
+                continue
+            model = rec["model"]
+            inp, out, cache_r = rec["input_tokens"], rec["output_tokens"], rec["cache_read_tokens"]
 
-                    rtype = row.get("type")
-                    payload = (
-                        row.get("payload")
-                        if isinstance(row.get("payload"), dict)
-                        else {}
-                    )
+            m = by_model[model]
+            m["input_tokens"] += inp
+            m["output_tokens"] += out
+            m["cache_read_tokens"] += cache_r
+            m["requests"] += 1
 
-                    if rtype == "turn_context":
-                        model = payload.get("model")
-                        if model:
-                            current_model = str(model)
-                        continue
+            d = by_day[day]
+            d["input_tokens"] += inp
+            d["output_tokens"] += out
+            d["requests"] += 1
 
-                    if rtype != "event_msg" or payload.get("type") != "token_count":
-                        continue
-
-                    day = parse_iso_date(row.get("timestamp"))
-                    if day is None or day < start or day > end:
-                        continue
-
-                    last = (payload.get("info") or {}).get("last_token_usage") or {}
-                    inp = safe_int(last.get("input_tokens"))
-                    # output_tokens already includes reasoning tokens as a
-                    # subset (same relationship as OpenAI's Responses API
-                    # output_tokens_details.reasoning_tokens) — adding
-                    # reasoning_output_tokens on top would double-count it.
-                    out = safe_int(last.get("output_tokens"))
-                    cache_r = safe_int(last.get("cached_input_tokens"))
-                    if not any((inp, out, cache_r)):
-                        continue
-
-                    limits = payload.get("rate_limits") or {}
-                    if limits.get("plan_type"):
-                        plan_type = str(limits["plan_type"])
-
-                    m = by_model[current_model]
-                    m["input_tokens"] += inp
-                    m["output_tokens"] += out
-                    m["cache_read_tokens"] += cache_r
-                    m["requests"] += 1
-
-                    d = by_day[day]
-                    d["input_tokens"] += inp
-                    d["output_tokens"] += out
-                    d["requests"] += 1
-
-                    totals["input_tokens"] += inp
-                    totals["output_tokens"] += out
-                    totals["cache_read_tokens"] += cache_r
-                    totals["requests"] += 1
-        except OSError:
-            continue
+            totals["input_tokens"] += inp
+            totals["output_tokens"] += out
+            totals["cache_read_tokens"] += cache_r
+            totals["requests"] += 1
 
     models = [
         ModelUsage(
@@ -283,3 +245,65 @@ def _scan_sessions(root: Path, start: date, end: date) -> dict[str, Any]:
         "daily": daily,
         "plan_type": plan_type,
     }
+
+
+def _parse_codex_file(path: Path) -> dict[str, Any]:
+    """Whole-file parse (no date filtering) so the cached result stays
+    valid across different --days windows; see llm_usage.logcache."""
+    records: list[dict[str, Any]] = []
+    plan_type: str | None = None
+    current_model = "codex"
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                rtype = row.get("type")
+                payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+
+                if rtype == "turn_context":
+                    model = payload.get("model")
+                    if model:
+                        current_model = str(model)
+                    continue
+
+                if rtype != "event_msg" or payload.get("type") != "token_count":
+                    continue
+
+                day = parse_iso_date(row.get("timestamp"))
+                if day is None:
+                    continue
+
+                last = (payload.get("info") or {}).get("last_token_usage") or {}
+                inp = safe_int(last.get("input_tokens"))
+                # output_tokens already includes reasoning tokens as a
+                # subset (same relationship as OpenAI's Responses API
+                # output_tokens_details.reasoning_tokens) — adding
+                # reasoning_output_tokens on top would double-count it.
+                out = safe_int(last.get("output_tokens"))
+                cache_r = safe_int(last.get("cached_input_tokens"))
+                if not any((inp, out, cache_r)):
+                    continue
+
+                limits = payload.get("rate_limits") or {}
+                if limits.get("plan_type"):
+                    plan_type = str(limits["plan_type"])
+
+                records.append(
+                    {
+                        "day": day.isoformat(),
+                        "model": current_model,
+                        "input_tokens": inp,
+                        "output_tokens": out,
+                        "cache_read_tokens": cache_r,
+                    }
+                )
+    except OSError:
+        pass
+    return {"records": records, "plan_type": plan_type}

@@ -11,6 +11,7 @@ from typing import Any
 import httpx
 
 from llm_usage.config import Settings
+from llm_usage.logcache import scan_with_cache
 from llm_usage.models import (
     DailyPoint,
     ModelUsage,
@@ -199,19 +200,41 @@ def _scan_local_logs(root: Path, start: date, end: date) -> dict[str, Any]:
 
     for path in root.rglob("*.jsonl"):
         sessions += 1
-        try:
-            with path.open("r", encoding="utf-8", errors="replace") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        row = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    _accumulate_row(row, start, end, by_model, by_day, totals)
-        except OSError:
-            continue
+        for rec in scan_with_cache("claude", path, _parse_claude_file):
+            day = date.fromisoformat(rec["day"])
+            if day < start or day > end:
+                continue
+            model = rec["model"]
+            inp, out, cache_r, cache_w = (
+                rec["input_tokens"],
+                rec["output_tokens"],
+                rec["cache_read_tokens"],
+                rec["cache_write_tokens"],
+            )
+            cost = estimate_cost(model, inp, out, cache_r, cache_w) or 0.0
+
+            m = by_model[model]
+            m["input_tokens"] += inp
+            m["output_tokens"] += out
+            m["cache_read_tokens"] += cache_r
+            m["cache_write_tokens"] += cache_w
+            m["requests"] += 1
+            m["cost_usd"] += cost
+
+            d = by_day[day]
+            d["input_tokens"] += inp
+            d["output_tokens"] += out
+            d["cache_read_tokens"] += cache_r
+            d["cache_write_tokens"] += cache_w
+            d["requests"] += 1
+            d["cost_usd"] += cost
+
+            totals["input_tokens"] += inp
+            totals["output_tokens"] += out
+            totals["cache_read_tokens"] += cache_r
+            totals["cache_write_tokens"] += cache_w
+            totals["requests"] += 1
+            totals["cost_usd"] += cost
 
     models = [
         ModelUsage(
@@ -252,60 +275,59 @@ def _scan_local_logs(root: Path, start: date, end: date) -> dict[str, Any]:
     }
 
 
-def _accumulate_row(
-    row: dict[str, Any],
-    start: date,
-    end: date,
-    by_model: dict[str, dict[str, int | float]],
-    by_day: dict[date, dict[str, int | float]],
-    totals: dict[str, int | float],
-) -> None:
+def _parse_claude_file(path: Path) -> list[dict[str, Any]]:
+    """Whole-file parse (no date filtering) so the cached result stays
+    valid across different --days windows; see llm_usage.logcache."""
+    records: list[dict[str, Any]] = []
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                rec = _parse_claude_row(row)
+                if rec is not None:
+                    records.append(rec)
+    except OSError:
+        pass
+    return records
+
+
+def _parse_claude_row(row: dict[str, Any]) -> dict[str, Any] | None:
     msg = row.get("message")
     if not isinstance(msg, dict):
-        return
+        return None
     usage = msg.get("usage")
     if not isinstance(usage, dict):
-        return
+        return None
 
     day = parse_iso_date(row.get("timestamp")) or parse_iso_date(msg.get("created_at"))
-    if day is None or day < start or day > end:
-        return
+    if day is None:
+        return None
 
     model = str(msg.get("model") or row.get("model") or "unknown")
     if model == "<synthetic>":
-        return
+        return None
 
     inp = safe_int(usage.get("input_tokens"))
     out = safe_int(usage.get("output_tokens"))
     cache_r = safe_int(usage.get("cache_read_input_tokens"))
     cache_w = safe_int(usage.get("cache_creation_input_tokens"))
     if not any((inp, out, cache_r, cache_w)):
-        return
+        return None
 
-    cost = estimate_cost(model, inp, out, cache_r, cache_w) or 0.0
-
-    m = by_model[model]
-    m["input_tokens"] += inp
-    m["output_tokens"] += out
-    m["cache_read_tokens"] += cache_r
-    m["cache_write_tokens"] += cache_w
-    m["requests"] += 1
-    m["cost_usd"] += cost
-
-    d = by_day[day]
-    d["input_tokens"] += inp
-    d["output_tokens"] += out
-    d["cache_read_tokens"] += cache_r
-    d["cache_write_tokens"] += cache_w
-    d["requests"] += 1
-    d["cost_usd"] += cost
-
-    totals["input_tokens"] += inp
-    totals["output_tokens"] += out
-    totals["cache_read_tokens"] += cache_r
-    totals["cache_write_tokens"] += cache_w
-    totals["requests"] += 1
-    totals["cost_usd"] += cost
+    return {
+        "day": day.isoformat(),
+        "model": model,
+        "input_tokens": inp,
+        "output_tokens": out,
+        "cache_read_tokens": cache_r,
+        "cache_write_tokens": cache_w,
+    }
 
 
 def _fill_from_admin_api(
