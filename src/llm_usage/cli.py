@@ -17,6 +17,7 @@ from llm_usage import __version__
 from llm_usage.config import load_settings
 from llm_usage.models import AggregateReport, ProviderReport, SourceKind
 from llm_usage.providers import collect_all
+from llm_usage.serialize import report_to_dict
 
 app = typer.Typer(
     name="llm-usage",
@@ -76,36 +77,38 @@ def dashboard_cmd(
 ) -> None:
     """Start a local web dashboard (http://127.0.0.1:8765)."""
     settings = load_settings()
+    if days is not None:
+        settings = settings.model_copy(update={"days": days})
     bind_host = host or settings.host
     bind_port = port or settings.port
     if bind_host not in ("127.0.0.1", "localhost", "::1"):
         console.print(
-            f"[yellow]⚠ Binding to {bind_host}: the dashboard has no authentication "
-            "and exposes your usage data. Keep it on 127.0.0.1 unless you trust "
-            "the network.[/yellow]"
+            f"[yellow]⚠ Binding to {bind_host}: keep this on a trusted network — "
+            "the dashboard is only protected by a per-session token, not real "
+            "authentication.[/yellow]"
         )
-    if days is not None:
-        # temporarily override via env for the app process
-        import os
 
-        os.environ["LLM_USAGE_DAYS"] = str(days)
+    from llm_usage.dashboard.app import create_app
+
+    dashboard_app = create_app(settings)
+    url = f"http://{bind_host}:{bind_port}/?token={dashboard_app.state.token}"
 
     console.print(
         Panel.fit(
             f"[bold]llm-usage dashboard[/bold]\n"
-            f"Open [link=http://{bind_host}:{bind_port}]http://{bind_host}:{bind_port}[/link]\n"
-            f"Press Ctrl+C to stop.",
+            f"Open [link={url}]{url}[/link]\n"
+            "(the token is required — it's regenerated each run and never written to disk)\n"
+            "Press Ctrl+C to stop.",
             border_style="cyan",
         )
     )
     import uvicorn
 
     uvicorn.run(
-        "llm_usage.dashboard.app:app",
+        dashboard_app,
         host=bind_host,
         port=bind_port,
         log_level="info",
-        reload=False,
     )
 
 
@@ -219,12 +222,27 @@ def status_cmd() -> None:
 def export_cmd(
     output: Path = typer.Option(Path("usage-report.json"), "--output", "-o"),
     days: Optional[int] = typer.Option(None, "--days", "-d"),
+    include_raw: bool = typer.Option(
+        False,
+        "--include-raw",
+        help="Include raw upstream payloads (OAuth usage bodies, billing "
+        "snapshots, API-key listings) in the export. Off by default since "
+        "these can be sensitive.",
+    ),
 ) -> None:
     """Write a JSON usage report to disk."""
+    import json
+    import os
+
     settings = load_settings()
     with console.status("Collecting usage…"):
         report = collect_all(settings, days=days)
-    output.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+    data = report_to_dict(report, include_raw_meta=include_raw)
+    output.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    try:
+        os.chmod(output, 0o600)
+    except OSError:
+        pass
     console.print(f"[green]Wrote[/green] {output.resolve()}")
 
 
@@ -249,7 +267,9 @@ def _show(
             raise typer.Exit(1)
 
     if fmt == OutputFormat.json:
-        console.print_json(report.model_dump_json())
+        import json
+
+        console.print_json(json.dumps(report_to_dict(report)))
         return
 
     _print_table(report)

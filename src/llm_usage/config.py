@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from pydantic import Field
@@ -12,9 +13,19 @@ def _default_config_dir() -> Path:
     return Path.home() / ".config" / "llm-usage"
 
 
+_GLOBAL_ENV_FILE = Path.home() / ".config" / "llm-usage" / ".env"
+
+
 class Settings(BaseSettings):
+    # Deliberately does NOT include a bare ".env" (current-working-directory)
+    # path here: llm-usage often gets run from inside other projects' repos,
+    # and auto-loading whatever ".env" happens to sit in the CWD would let an
+    # untrusted checkout override API keys, rebind the dashboard host, or
+    # redirect log-scan directories. Opt in per-invocation with
+    # LLM_USAGE_ENV_FILE=path/to/.env (a real env var, not something a repo
+    # can set just by existing on disk).
     model_config = SettingsConfigDict(
-        env_file=(".env", Path.home() / ".config" / "llm-usage" / ".env"),
+        env_file=_GLOBAL_ENV_FILE,
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -69,4 +80,7 @@ class Settings(BaseSettings):
 
 
 def load_settings() -> Settings:
+    extra_env_file = os.environ.get("LLM_USAGE_ENV_FILE")
+    if extra_env_file:
+        return Settings(_env_file=(_GLOBAL_ENV_FILE, extra_env_file))  # type: ignore[call-arg]
     return Settings()

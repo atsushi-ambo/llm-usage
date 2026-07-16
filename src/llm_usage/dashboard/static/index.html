@@ -242,6 +242,36 @@
 
     const $ = (id) => document.getElementById(id);
 
+    const ESC_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+    function esc(s) {
+      if (s == null) return '';
+      return String(s).replace(/[&<>"']/g, (c) => ESC_MAP[c]);
+    }
+    // Only these provider ids are used as CSS class names / lookups.
+    const KNOWN_PROVIDERS = new Set(['claude', 'openai', 'codex', 'grok', 'cursor', 'gemini']);
+    function safeProviderClass(p) {
+      return KNOWN_PROVIDERS.has(p) ? p : 'unknown';
+    }
+    // Only allow console links to known, official provider hosts.
+    const ALLOWED_LINK_HOSTS = new Set([
+      'claude.ai', 'console.anthropic.com',
+      'chatgpt.com', 'platform.openai.com',
+      'console.x.ai', 'x.ai',
+      'cursor.com', 'www.cursor.com',
+      'aistudio.google.com',
+    ]);
+    function safeUrl(u) {
+      if (!u) return null;
+      try {
+        const parsed = new URL(String(u));
+        if (parsed.protocol !== 'https:') return null;
+        if (!ALLOWED_LINK_HOSTS.has(parsed.hostname)) return null;
+        return parsed.href;
+      } catch {
+        return null;
+      }
+    }
+
     function fmtNum(n) {
       if (n == null || n === 0) return '—';
       return Number(n).toLocaleString();
@@ -372,7 +402,7 @@
         const wp = clampPct(w.used_percent);
         return `
           <div class="quota-meta" style="margin-top:.4rem">
-            <span><strong>${w.label}</strong></span>
+            <span><strong>${esc(w.label)}</strong></span>
             <span class="${pctClass(wp)}">${Math.round(wp)}%</span>
           </div>
           <div class="quota-track" style="height:7px">
@@ -386,14 +416,14 @@
               ${Math.round(pct)}%<small>used</small>
             </div>
             <div class="quota-reset">
-              ${quota.label || 'Quota'}${reset ? `<br>Resets ${reset}` : ''}
+              ${esc(quota.label || 'Quota')}${reset ? `<br>Resets ${esc(reset)}` : ''}
             </div>
           </div>
           <div class="quota-track">
             <i class="quota-fill" style="width:${pct}%;background:${fill}"></i>
           </div>
           <div class="quota-meta">
-            <span>${quota.plan ? `Plan: <strong>${quota.plan}</strong>` : ''}</span>
+            <span>${quota.plan ? `Plan: <strong>${esc(quota.plan)}</strong>` : ''}</span>
             <span>${Math.round(100 - pct)}% remaining</span>
           </div>
           ${windowRows}
@@ -413,7 +443,7 @@
           `${data.period_start} → ${data.period_end} · fetched ${new Date(data.generated_at).toLocaleTimeString()}`;
       } catch (e) {
         $('status').textContent = 'Error';
-        $('providers').innerHTML = `<div class="empty" style="color:var(--yellow)">${e.message}</div>`;
+        $('providers').innerHTML = `<div class="empty" style="color:var(--yellow)">${esc(e.message)}</div>`;
       }
     }
 
@@ -441,14 +471,18 @@
         const est = p.meta && p.meta.estimated;
         const quota = extractQuota(p);
         const models = (p.models || []).slice(0, 8);
-        const modelRows = models.map(m => `
+        const modelRows = models.map(m => {
+          const name = esc(m.model);
+          const shortName = m.model.length > 28 ? esc(m.model.slice(0, 26)) + '…' : name;
+          return `
           <tr>
-            <td title="${m.model}">${m.model.length > 28 ? m.model.slice(0, 26) + '…' : m.model}</td>
+            <td title="${name}">${shortName}</td>
             <td>${fmtNum(m.requests)}</td>
             <td>${fmtTok(m.input_tokens)}</td>
             <td>${fmtTok(m.output_tokens)}</td>
             <td>${m.cost_usd != null ? fmtCost(m.cost_usd, est) : '—'}</td>
-          </tr>`).join('');
+          </tr>`;
+        }).join('');
 
         // Prefer short notes; hide long HTTP error dumps
         const shortNotes = (p.notes || []).filter(n => n.length < 180).slice(0, 2);
@@ -462,16 +496,20 @@
           ...shortErrs.map(e => e),
         ].map(n => {
           const isErr = shortErrs.includes(n) || n.startsWith('⚠');
-          return `<div class="${isErr ? 'err' : ''}">${isErr && !n.startsWith('⚠') ? '⚠ ' : ''}${n}</div>`;
+          return `<div class="${isErr ? 'err' : ''}">${isErr && !n.startsWith('⚠') ? '⚠ ' : ''}${esc(n)}</div>`;
         }).join('');
 
+        const providerClass = safeProviderClass(p.provider);
+        const sourceClass = /^[a-z_]+$/.test(String(p.source || '')) ? p.source : 'unavailable';
+        const consoleUrl = p.meta && safeUrl(p.meta.console_url);
+
         return `
-          <article class="card provider ${p.provider}">
+          <article class="card provider ${providerClass}">
             <h2>
-              <span>${p.display_name}</span>
-              <span class="badge ${p.source}">${p.source}</span>
+              <span>${esc(p.display_name)}</span>
+              <span class="badge ${sourceClass}">${esc(p.source)}</span>
             </h2>
-            ${quota ? renderQuotaBlock(quota, COLORS[p.provider]) : ''}
+            ${quota ? renderQuotaBlock(quota, COLORS[providerClass]) : ''}
             <div class="metrics">
               <div><span>Cost</span><strong>${fmtCost(p.cost_usd, est)}</strong></div>
               <div><span>Requests</span><strong>${fmtNum(p.requests)}</strong></div>
@@ -483,7 +521,7 @@
               <tbody>${modelRows}</tbody>
             </table></div>` : ''}
             ${notes ? `<div class="notes">${notes}</div>` : ''}
-            ${p.meta && p.meta.console_url ? `<div class="notes"><a href="${p.meta.console_url}" target="_blank" rel="noopener">Open console ↗</a></div>` : ''}
+            ${consoleUrl ? `<div class="notes"><a href="${esc(consoleUrl)}" target="_blank" rel="noopener">Open console ↗</a></div>` : ''}
           </article>
         `;
       }).join('');

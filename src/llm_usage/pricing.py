@@ -6,6 +6,7 @@ Prices are approximate snapshots — treat as estimates, not invoices.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 
@@ -59,15 +60,24 @@ PRICES: dict[str, ModelPrice] = {
 }
 
 
+# Word-boundary matching (not bare substring) so a short key like "o1" or
+# "codex" only matches a whole id segment — e.g. it won't fire on a "...4o1..."
+# or "...codex..." that happens to appear mid-token with no separator.
+# Hyphens/dots count as separators since \b triggers on any non-word char.
+_PRICE_PATTERNS: dict[str, re.Pattern[str]] = {
+    name: re.compile(r"\b" + re.escape(name) + r"\b") for name in PRICES
+}
+
+
 def lookup_price(model: str) -> ModelPrice | None:
     key = (model or "").lower()
     if not key or key == "<synthetic>":
         return None
     best: tuple[int, ModelPrice] | None = None
-    for name, price in PRICES.items():
-        if name in key:
+    for name, pattern in _PRICE_PATTERNS.items():
+        if pattern.search(key):
             if best is None or len(name) > best[0]:
-                best = (len(name), price)
+                best = (len(name), PRICES[name])
     return best[1] if best else None
 
 

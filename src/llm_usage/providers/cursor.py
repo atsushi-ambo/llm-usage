@@ -16,7 +16,7 @@ from llm_usage.models import (
     ProviderReport,
     SourceKind,
 )
-from llm_usage.providers.base import safe_float, safe_int
+from llm_usage.providers.base import safe_error_str, safe_float, safe_int
 
 
 def collect_cursor(settings: Settings, start: date, end: date) -> ProviderReport:
@@ -34,7 +34,7 @@ def collect_cursor(settings: Settings, start: date, end: date) -> ProviderReport
             _fill_admin_api(report, settings.cursor_api_key, start, end)
             report.source = SourceKind.API
         except Exception as exc:  # noqa: BLE001
-            report.errors.append(f"Admin API: {exc}")
+            report.errors.append(f"Admin API: {safe_error_str(exc)}")
 
     if settings.cursor_session_token and report.source == SourceKind.UNAVAILABLE:
         try:
@@ -45,7 +45,7 @@ def collect_cursor(settings: Settings, start: date, end: date) -> ProviderReport
                 "Tokens expire — refresh from browser cookies when needed."
             )
         except Exception as exc:  # noqa: BLE001
-            report.errors.append(f"Dashboard session: {exc}")
+            report.errors.append(f"Dashboard session: {safe_error_str(exc)}")
 
     if report.source == SourceKind.UNAVAILABLE:
         report.notes.append(
@@ -144,29 +144,20 @@ def _parse_daily_usage(report: ProviderReport, body: dict[str, Any]) -> None:
             ts = day_raw / 1000 if day_raw > 1e12 else day_raw
             day = datetime.fromtimestamp(ts, tz=timezone.utc).date()
 
-        reqs = safe_int(
-            row.get("totalLinesAdded")  # not ideal but present on some payloads
-            or row.get("composerRequests")
-            or row.get("chatRequests")
-            or row.get("requests")
-            or row.get("totalAccepts")
-        )
         # Prefer explicit cost fields
         cost = (
             safe_float(row.get("totalCost"))
             or safe_float(row.get("cost"))
             or safe_float(row.get("spend"))
         )
-        # Sum multiple request types when available
-        for k in (
-            "composerRequests",
-            "chatRequests",
-            "agentRequests",
-            "cmdkUsages",
-            "bugbotUsages",
-        ):
-            if k in row:
-                reqs = max(reqs, 0) + safe_int(row.get(k))
+        # Sum per-type request counts when the payload breaks them out;
+        # only fall back to a single generic field when none are present
+        # (summing both would double-count the same requests).
+        type_keys = ("composerRequests", "chatRequests", "agentRequests", "cmdkUsages", "bugbotUsages")
+        if any(k in row for k in type_keys):
+            reqs = sum(safe_int(row.get(k)) for k in type_keys)
+        else:
+            reqs = safe_int(row.get("requests") or row.get("totalAccepts"))
 
         if day:
             daily.append(
@@ -288,7 +279,10 @@ def _apply_dashboard_body(report: ProviderReport, body: dict[str, Any]) -> None:
         if report.cost_usd is None and total_cost:
             report.cost_usd = total_cost
 
-    # Nested summary fields
+    # Nested legacy summary fields — used only as a fallback request count
+    # when the aggregation list above didn't already give us one, since a
+    # payload can carry both shapes and adding them would double-count.
+    plan_total = 0
     for key in ("gpt-4", "gpt-4o", "claude-3-5-sonnet", "claude-4", "premium"):
         if key in body and isinstance(body[key], dict):
             block = body[key]
@@ -298,4 +292,6 @@ def _apply_dashboard_body(report: ProviderReport, body: dict[str, Any]) -> None:
                 "used": num,
                 "max": max_req or None,
             }
-            report.requests += num
+            plan_total += num
+    if not report.requests and plan_total:
+        report.requests = plan_total

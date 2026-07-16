@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import tempfile
 import threading
@@ -15,6 +14,7 @@ from pathlib import Path
 from llm_usage.config import load_settings
 from llm_usage.models import AggregateReport, ProviderReport
 from llm_usage.providers import collect_all
+from llm_usage.quota import atomic_write_json
 
 REFRESH_SECONDS = 120
 PREFS_PATH = Path.home() / ".config" / "llm-usage" / "menubar.json"
@@ -48,8 +48,7 @@ def _load_prefs() -> dict:
 def _save_prefs(prefs: dict) -> None:
     PREFS_PATH.parent.mkdir(parents=True, exist_ok=True)
     try:
-        PREFS_PATH.write_text(json.dumps(prefs, indent=2), encoding="utf-8")
-        os.chmod(PREFS_PATH, 0o600)
+        atomic_write_json(PREFS_PATH, prefs)
     except OSError:
         pass
 
@@ -380,20 +379,40 @@ def run_menubar() -> None:
         refresh_item = rumps.MenuItem("Refresh Now")
         quit_item = rumps.MenuItem("Quit llm-usage")
 
+        def _authenticated_dashboard_url() -> str | None:
+            """URL for an already-running dashboard, with its token if we can
+            find it (the dashboard writes its session to a 0600 cache file
+            on start; see llm_usage.quota.write_dashboard_session)."""
+            try:
+                import httpx
+
+                r = httpx.get(
+                    f"http://{settings.host}:{settings.port}/api/health",
+                    timeout=1.0,
+                )
+                if r.status_code != 200:
+                    return None
+            except Exception:  # noqa: BLE001
+                return None
+
+            from llm_usage.quota import read_dashboard_session
+
+            session = read_dashboard_session()
+            if (
+                session
+                and session.get("host") == settings.host
+                and session.get("port") == settings.port
+                and session.get("token")
+            ):
+                return f"http://{settings.host}:{settings.port}/?token={session['token']}"
+            return f"http://{settings.host}:{settings.port}/"
+
         def _open_dashboard(_=None) -> None:
             def _run() -> None:
-                try:
-                    import httpx
-
-                    r = httpx.get(
-                        f"http://{settings.host}:{settings.port}/api/health",
-                        timeout=1.0,
-                    )
-                    if r.status_code == 200:
-                        webbrowser.open(f"http://{settings.host}:{settings.port}/")
-                        return
-                except Exception:  # noqa: BLE001
-                    pass
+                url = _authenticated_dashboard_url()
+                if url:
+                    webbrowser.open(url)
+                    return
                 subprocess.Popen(
                     [
                         "llm-usage",
@@ -407,8 +426,11 @@ def run_menubar() -> None:
                     stderr=subprocess.DEVNULL,
                     start_new_session=True,
                 )
-                time.sleep(1.2)
-                webbrowser.open(f"http://{settings.host}:{settings.port}/")
+                time.sleep(1.5)
+                webbrowser.open(
+                    _authenticated_dashboard_url()
+                    or f"http://{settings.host}:{settings.port}/"
+                )
 
             threading.Thread(target=_run, daemon=True).start()
 
