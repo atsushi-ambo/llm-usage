@@ -224,9 +224,11 @@ def _scan_sessions(root: Path, start: date, end: date) -> dict[str, Any]:
 
                     last = (payload.get("info") or {}).get("last_token_usage") or {}
                     inp = safe_int(last.get("input_tokens"))
-                    out = safe_int(last.get("output_tokens")) + safe_int(
-                        last.get("reasoning_output_tokens")
-                    )
+                    # output_tokens already includes reasoning tokens as a
+                    # subset (same relationship as OpenAI's Responses API
+                    # output_tokens_details.reasoning_tokens) — adding
+                    # reasoning_output_tokens on top would double-count it.
+                    out = safe_int(last.get("output_tokens"))
                     cache_r = safe_int(last.get("cached_input_tokens"))
                     if not any((inp, out, cache_r)):
                         continue

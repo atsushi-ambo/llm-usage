@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -96,10 +96,11 @@ def _scan_local_logs(root: Path, start: date, end: date) -> dict[str, Any]:
     )
     totals = {"input_tokens": 0, "output_tokens": 0, "requests": 0, "cost_usd": 0.0}
 
-    # Gemini CLI: ~/.gemini/tmp/*/chats/*.json
-    chat_files = list(root.glob("tmp/*/chats/*.json"))
-    chat_files += list(root.glob("**/chats/*.json"))
-    # Also session/history style files if present
+    # Gemini CLI: ~/.gemini/tmp/*/chats/*.json (pattern below also covers
+    # this). Also sweep other session/history-style JSON under tmp/ — usage
+    # is only counted from objects that actually carry a usageMetadata-shaped
+    # block, so unrelated JSON here is harmless noise, not miscounted data.
+    chat_files = list(root.glob("**/chats/*.json"))
     chat_files += list(root.glob("tmp/**/*.json"))
 
     seen: set[Path] = set()
@@ -111,7 +112,11 @@ def _scan_local_logs(root: Path, start: date, end: date) -> dict[str, Any]:
             data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
         except (OSError, json.JSONDecodeError):
             continue
-        _walk_gemini_obj(data, start, end, by_model, by_day, totals)
+        try:
+            fallback_day = datetime.fromtimestamp(path.stat().st_mtime).date()
+        except OSError:
+            fallback_day = None
+        _walk_gemini_obj(data, start, end, by_model, by_day, totals, fallback_day)
 
     models = [
         ModelUsage(
@@ -143,10 +148,11 @@ def _walk_gemini_obj(
     by_model: dict[str, dict[str, int | float]],
     by_day: dict[date, dict[str, int | float]],
     totals: dict[str, int | float],
+    fallback_day: date | None = None,
 ) -> None:
     if isinstance(obj, list):
         for item in obj:
-            _walk_gemini_obj(item, start, end, by_model, by_day, totals)
+            _walk_gemini_obj(item, start, end, by_model, by_day, totals, fallback_day)
         return
     if not isinstance(obj, dict):
         return
@@ -164,9 +170,11 @@ def _walk_gemini_obj(
             or parse_iso_date(obj.get("createTime"))
             or parse_iso_date(obj.get("created_at"))
             or parse_iso_date(obj.get("time"))
+            # File mtime as a last resort so undated messages still land in
+            # *some* day bucket instead of being counted into every window.
+            or fallback_day
         )
-        # if nested messages have no date, still count if parent walk set day later
-        if day is None or (start <= day <= end):
+        if day is not None and start <= day <= end:
             model = str(
                 obj.get("model")
                 or obj.get("modelVersion")
@@ -199,16 +207,15 @@ def _walk_gemini_obj(
                 totals["output_tokens"] += out
                 totals["requests"] += 1
                 totals["cost_usd"] += cost
-                if day and start <= day <= end:
-                    d = by_day[day]
-                    d["input_tokens"] += inp
-                    d["output_tokens"] += out
-                    d["requests"] += 1
-                    d["cost_usd"] += cost
+                d = by_day[day]
+                d["input_tokens"] += inp
+                d["output_tokens"] += out
+                d["requests"] += 1
+                d["cost_usd"] += cost
 
     for v in obj.values():
         if isinstance(v, (dict, list)):
-            _walk_gemini_obj(v, start, end, by_model, by_day, totals)
+            _walk_gemini_obj(v, start, end, by_model, by_day, totals, fallback_day)
 
 
 def _list_models(api_key: str) -> list[str]:

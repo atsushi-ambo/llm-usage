@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, Field
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class ProviderId(str, Enum):
@@ -52,6 +56,8 @@ class DailyPoint(BaseModel):
     day: date
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
     requests: int = 0
     cost_usd: float | None = None
 
@@ -75,7 +81,7 @@ class ProviderReport(BaseModel):
     meta: dict[str, Any] = Field(default_factory=dict)
     errors: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
-    fetched_at: datetime = Field(default_factory=datetime.utcnow)
+    fetched_at: datetime = Field(default_factory=_utc_now)
 
     @property
     def total_tokens(self) -> int:
@@ -97,7 +103,7 @@ class AggregateReport(BaseModel):
     period_start: date
     period_end: date
     providers: list[ProviderReport] = Field(default_factory=list)
-    generated_at: datetime = Field(default_factory=datetime.utcnow)
+    generated_at: datetime = Field(default_factory=_utc_now)
 
     @property
     def total_cost_usd(self) -> float | None:

@@ -178,7 +178,14 @@ def _scan_local_logs(root: Path, start: date, end: date) -> dict[str, Any]:
         }
     )
     by_day: dict[date, dict[str, int | float]] = defaultdict(
-        lambda: {"input_tokens": 0, "output_tokens": 0, "requests": 0, "cost_usd": 0.0}
+        lambda: {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "requests": 0,
+            "cost_usd": 0.0,
+        }
     )
     sessions = 0
     totals = {
@@ -223,6 +230,8 @@ def _scan_local_logs(root: Path, start: date, end: date) -> dict[str, Any]:
             day=d,
             input_tokens=int(v["input_tokens"]),
             output_tokens=int(v["output_tokens"]),
+            cache_read_tokens=int(v["cache_read_tokens"]),
+            cache_write_tokens=int(v["cache_write_tokens"]),
             requests=int(v["requests"]),
             cost_usd=float(v["cost_usd"]) if v["cost_usd"] else None,
         )
@@ -286,6 +295,8 @@ def _accumulate_row(
     d = by_day[day]
     d["input_tokens"] += inp
     d["output_tokens"] += out
+    d["cache_read_tokens"] += cache_r
+    d["cache_write_tokens"] += cache_w
     d["requests"] += 1
     d["cost_usd"] += cost
 
@@ -423,6 +434,8 @@ def _merge_usage_buckets(report: ProviderReport, pages: list[dict[str, Any]]) ->
                     dp = by_day.get(bucket_start) or DailyPoint(day=bucket_start)
                     dp.input_tokens += inp
                     dp.output_tokens += out
+                    dp.cache_read_tokens += cache_r
+                    dp.cache_write_tokens += cache_w
                     dp.requests += reqs or (1 if (inp or out) else 0)
                     if est is not None:
                         dp.cost_usd = (dp.cost_usd or 0.0) + est

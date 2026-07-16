@@ -46,11 +46,17 @@ def collect_openai(settings: Settings, start: date, end: date) -> ProviderReport
     try:
         with httpx.Client(timeout=30.0) as client:
             usage = _fetch_completions_usage(client, headers, start_ts, days=settings.days)
-            costs = _fetch_costs(client, headers, start_ts, days=settings.days)
-        _apply_usage(report, usage)
-        if costs is not None:
-            report.cost_usd = costs
-        report.source = SourceKind.API
+            # Apply usage before touching costs: a cost-endpoint failure
+            # (rate limit, missing scope, transient 5xx) shouldn't discard
+            # usage data we already successfully fetched.
+            _apply_usage(report, usage)
+            report.source = SourceKind.API
+            try:
+                costs = _fetch_costs(client, headers, start_ts, days=settings.days)
+                if costs is not None:
+                    report.cost_usd = costs
+            except httpx.HTTPStatusError as cost_exc:
+                report.errors.append(f"Costs: {safe_error_str(cost_exc)}")
         if not settings.openai_admin_key:
             report.notes.append(
                 "Using OPENAI_API_KEY — if you get 401/404, create an Admin key "
@@ -149,6 +155,7 @@ def _apply_usage(report: ProviderReport, buckets: list[dict[str, Any]]) -> None:
                 dp = by_day.get(day) or DailyPoint(day=day)
                 dp.input_tokens += inp
                 dp.output_tokens += out
+                dp.cache_read_tokens += cache_r
                 dp.requests += reqs
                 by_day[day] = dp
 

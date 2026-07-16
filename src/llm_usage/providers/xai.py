@@ -220,7 +220,10 @@ def _scan_grok_build(home: Path, start: date, end: date) -> dict[str, Any]:
                 sid = str(row.get("sid") or "")
                 if sid:
                     session_ids.add(sid)
-                model = session_model.get(sid) or "grok-4.5"
+                # Don't guess a specific version when we can't map the
+                # session to a model — it would misattribute tokens/cost to
+                # whatever "grok-4.5" happens to price at.
+                model = session_model.get(sid) or "grok (unknown)"
 
                 m = by_model[model]
                 m["input_tokens"] += inp

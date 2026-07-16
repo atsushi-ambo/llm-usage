@@ -38,7 +38,14 @@ def collect_all(settings: Settings, days: int | None = None) -> AggregateReport:
 
 
 def _merge_openai_family(codex: ProviderReport, openai: ProviderReport) -> ProviderReport:
-    """Combine ChatGPT/Codex plan usage with optional Platform API billing."""
+    """Combine ChatGPT/Codex plan usage with optional Platform API billing.
+
+    "Has data" here deliberately means "source got set past UNAVAILABLE (or
+    we can see tokens/quota)" rather than "no errors occurred" — a collector
+    that fetched partial data before hitting an error still has something
+    worth showing, and its errors are preserved via report.errors either way
+    (see the "both have data" branch below and each collect_* function).
+    """
     has_codex = codex.source != SourceKind.UNAVAILABLE or codex.requests > 0 or codex.meta.get(
         "quota"
     )
@@ -47,6 +54,10 @@ def _merge_openai_family(codex: ProviderReport, openai: ProviderReport) -> Provi
     if not has_api and has_codex:
         codex.display_name = "OpenAI / Codex"
         codex.provider = ProviderId.CODEX
+        # openai.errors here would only be real errors (has_api is False,
+        # but that doesn't mean openai.collect() didn't hit one) — surface
+        # them instead of silently dropping the unreturned report.
+        codex.errors.extend(f"API: {e}" for e in openai.errors)
         return codex
     if has_api and not has_codex:
         openai.display_name = "OpenAI / Codex"
@@ -55,6 +66,7 @@ def _merge_openai_family(codex: ProviderReport, openai: ProviderReport) -> Provi
             "Platform API usage only (no Codex ChatGPT plan data found).",
             *openai.notes,
         ]
+        openai.errors.extend(codex.errors)
         return openai
     if not has_api and not has_codex:
         # Prefer a single empty card
@@ -67,6 +79,7 @@ def _merge_openai_family(codex: ProviderReport, openai: ProviderReport) -> Provi
         for n in openai.notes:
             if n not in codex.notes:
                 codex.notes.append(n)
+        codex.errors.extend(f"API: {e}" for e in openai.errors)
         return codex
 
     # Both have data: prefer Codex as base (subscription) + attach API cost/tokens
