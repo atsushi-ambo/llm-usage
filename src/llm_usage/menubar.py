@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 from llm_usage.config import load_settings
-from llm_usage.models import AggregateReport, ProviderReport
+from llm_usage.models import AggregateReport, ProviderId, ProviderReport
 from llm_usage.providers import collect_all_cached
 from llm_usage.quota import atomic_write_json
 
@@ -53,9 +53,34 @@ def _save_prefs(prefs: dict) -> None:
         pass
 
 
-def _quota_of(p: ProviderReport) -> float | None:
+def _display_quota(p: ProviderReport) -> dict | None:
+    """Quota dict to use for the provider's headline %/reset in the menu bar.
+
+    For Claude, this is the 5-hour window rather than the 7-day window
+    claude_quota_from_oauth() treats as "primary" for the CLI/dashboard's
+    single headline number: 5-hour resets every few hours and is what
+    actually blocks you next, so it's the more useful at-a-glance signal
+    for something you're glancing at near the clock. The 7-day figure is
+    still shown as one of the sub-window rows underneath.
+    """
     q = (p.meta or {}).get("quota") or {}
-    pct = q.get("used_percent")
+    if p.provider == ProviderId.CLAUDE:
+        windows = q.get("windows") or []
+        five_hour = next((w for w in windows if w.get("key") == "five_hour"), None)
+        if five_hour and five_hour.get("used_percent") is not None:
+            return {
+                "used_percent": five_hour.get("used_percent"),
+                "resets_at": five_hour.get("resets_at"),
+                "label": five_hour.get("label"),
+                "plan": q.get("plan"),
+                "windows": q.get("windows"),
+            }
+    return q if q.get("used_percent") is not None else None
+
+
+def _quota_of(p: ProviderReport) -> float | None:
+    q = _display_quota(p)
+    pct = q.get("used_percent") if q else None
     if pct is None:
         return None
     try:
@@ -288,7 +313,7 @@ def run_menubar() -> None:
                 )
                 if pct is not None:
                     bar = _unicode_bar(pct, 12)
-                    q = (p.meta or {}).get("quota") or {}
+                    q = _display_quota(p) or {}
                     plan = q.get("plan") or ""
                     label = q.get("label") or "quota"
                     line = f"{style['letter']}  {p.display_name}  {bar}  {pct:.0f}%"
