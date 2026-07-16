@@ -18,7 +18,7 @@ from llm_usage.models import (
     ProviderReport,
     SourceKind,
 )
-from llm_usage.providers.base import parse_iso_date, safe_int
+from llm_usage.providers.base import parse_iso_date, safe_error_str, safe_int
 
 
 def collect_codex(settings: Settings, start: date, end: date) -> ProviderReport:
@@ -99,7 +99,7 @@ def collect_codex(settings: Settings, start: date, end: date) -> ProviderReport:
             elif plan:
                 report.notes.append(f"Live Codex plan: {plan}")
         except Exception as exc:  # noqa: BLE001
-            report.errors.append(f"Codex quota API: {exc}")
+            report.errors.append(f"Codex quota API: {safe_error_str(exc)}")
     elif not (root / "sessions").exists():
         report.notes.append(
             "No ~/.codex found. Install Codex CLI and sign in with ChatGPT "

@@ -15,7 +15,7 @@ from llm_usage.models import (
     ProviderReport,
     SourceKind,
 )
-from llm_usage.providers.base import safe_float, safe_int
+from llm_usage.providers.base import safe_error_str, safe_float, safe_int
 
 
 def collect_openai(settings: Settings, start: date, end: date) -> ProviderReport:
@@ -57,14 +57,12 @@ def collect_openai(settings: Settings, start: date, end: date) -> ProviderReport
                 "in platform.openai.com → Organization → Admin keys."
             )
     except httpx.HTTPStatusError as exc:
-        report.errors.append(
-            f"OpenAI API HTTP {exc.response.status_code}: {exc.response.text[:200]}"
-        )
+        report.errors.append(f"OpenAI API: {safe_error_str(exc)}")
         report.notes.append(
             "Org usage/costs need an Admin API key with usage.read scope."
         )
     except Exception as exc:  # noqa: BLE001
-        report.errors.append(str(exc))
+        report.errors.append(safe_error_str(exc))
 
     return report
 

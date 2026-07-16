@@ -75,7 +75,16 @@ Optional: copy env template and fill only the keys you have.
 
 ```bash
 cp .env.example ~/.config/llm-usage/.env
-# or keep a project-local .env next to the repo
+```
+
+`~/.config/llm-usage/.env` is the only `.env` loaded automatically —
+llm-usage does **not** read a `.env` from your current directory, since it's
+often run from inside other projects' repos and an untrusted checkout's
+`.env` could otherwise override your API keys or the dashboard bind host.
+For a project-local `.env` during development, opt in explicitly:
+
+```bash
+LLM_USAGE_ENV_FILE=.env llm-usage status
 ```
 
 ---
@@ -167,6 +176,20 @@ src/llm_usage/
 ```
 
 All collection is **read-only**. No data is uploaded; the dashboard binds to `127.0.0.1` by default.
+
+### Dashboard security
+
+- Each `llm-usage dashboard` run generates a fresh, random token (never
+  written to disk in plaintext except a 0600 session file used only so
+  `llm-usage menubar`'s "Open Dashboard" can reuse it). The printed URL
+  includes `?token=...` — open that link; the browser then holds an
+  HttpOnly cookie for the rest of the session.
+- The `Host` header is checked against loopback names on every request,
+  which blocks DNS-rebinding attempts to read your usage data from a
+  malicious webpage.
+- `/api/usage` responses and `export` output strip raw upstream payloads
+  (full OAuth usage bodies, billing snapshots, API key listings) by default;
+  pass `--include-raw` to `export` if you need them for debugging.
 
 ---
 

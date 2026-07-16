@@ -16,7 +16,7 @@ from llm_usage.models import (
     ProviderReport,
     SourceKind,
 )
-from llm_usage.providers.base import safe_float, safe_int
+from llm_usage.providers.base import safe_error_str, safe_float, safe_int
 
 
 def collect_cursor(settings: Settings, start: date, end: date) -> ProviderReport:
@@ -34,7 +34,7 @@ def collect_cursor(settings: Settings, start: date, end: date) -> ProviderReport
             _fill_admin_api(report, settings.cursor_api_key, start, end)
             report.source = SourceKind.API
         except Exception as exc:  # noqa: BLE001
-            report.errors.append(f"Admin API: {exc}")
+            report.errors.append(f"Admin API: {safe_error_str(exc)}")
 
     if settings.cursor_session_token and report.source == SourceKind.UNAVAILABLE:
         try:
@@ -45,7 +45,7 @@ def collect_cursor(settings: Settings, start: date, end: date) -> ProviderReport
                 "Tokens expire — refresh from browser cookies when needed."
             )
         except Exception as exc:  # noqa: BLE001
-            report.errors.append(f"Dashboard session: {exc}")
+            report.errors.append(f"Dashboard session: {safe_error_str(exc)}")
 
     if report.source == SourceKind.UNAVAILABLE:
         report.notes.append(

@@ -19,7 +19,7 @@ from llm_usage.models import (
     SourceKind,
 )
 from llm_usage.pricing import estimate_cost
-from llm_usage.providers.base import parse_iso_date, safe_float, safe_int
+from llm_usage.providers.base import parse_iso_date, safe_error_str, safe_float, safe_int
 from llm_usage.quota import (
     claude_quota_from_oauth,
     clear_cooldown,
@@ -53,7 +53,7 @@ def collect_claude(settings: Settings, start: date, end: date) -> ProviderReport
             _fill_from_admin_api(report, settings.anthropic_admin_key, start, end)
             report.source = SourceKind.API
         except Exception as exc:  # noqa: BLE001
-            report.errors.append(f"Admin API: {exc}")
+            report.errors.append(f"Admin API: {safe_error_str(exc)}")
 
     # 2) Local Claude Code transcripts (always useful; fills gaps)
     local = _scan_local_logs(settings.claude_projects_dir, start, end)
@@ -112,12 +112,12 @@ def collect_claude(settings: Settings, start: date, end: date) -> ProviderReport
                     report.meta["quota_stale"] = True
                     report.notes.append(
                         f"Claude quota from cache ({q.get('label')}: "
-                        f"{q['used_percent']:.0f}%) — live API: {exc}"
+                        f"{q['used_percent']:.0f}%) — live API: {safe_error_str(exc)}"
                     )
                 else:
-                    report.errors.append(f"OAuth usage: {exc}")
+                    report.errors.append(f"OAuth usage: {safe_error_str(exc)}")
             else:
-                report.errors.append(f"OAuth usage: {exc}")
+                report.errors.append(f"OAuth usage: {safe_error_str(exc)}")
                 if cred_meta.get("plan"):
                     report.notes.append(
                         f"Claude Code plan={cred_meta['plan']} "
@@ -355,7 +355,7 @@ def _fill_from_admin_api(
             if total_cents:
                 report.cost_usd = total_cents / 100.0
         except Exception as exc:  # noqa: BLE001
-            report.errors.append(f"Cost API: {exc}")
+            report.errors.append(f"Cost API: {safe_error_str(exc)}")
 
 
 def _paginate(

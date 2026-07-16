@@ -18,7 +18,7 @@ from llm_usage.models import (
     ProviderReport,
     SourceKind,
 )
-from llm_usage.providers.base import parse_iso_date, safe_float, safe_int
+from llm_usage.providers.base import parse_iso_date, safe_error_str, safe_float, safe_int
 
 
 def collect_xai(settings: Settings, start: date, end: date) -> ProviderReport:
@@ -102,7 +102,7 @@ def collect_xai(settings: Settings, start: date, end: date) -> ProviderReport:
                 "API pay-as-you-go spend is in console.x.ai (separate from Grok Build)."
             )
         except Exception as exc:  # noqa: BLE001
-            report.errors.append(f"xAI API: {exc}")
+            report.errors.append(f"xAI API: {safe_error_str(exc)}")
 
     if settings.xai_management_key and settings.xai_team_id:
         try:
@@ -112,7 +112,7 @@ def collect_xai(settings: Settings, start: date, end: date) -> ProviderReport:
                 report.source = SourceKind.API
             report.notes.append("Management API connected (API keys listed).")
         except Exception as exc:  # noqa: BLE001
-            report.errors.append(f"Management API: {exc}")
+            report.errors.append(f"Management API: {safe_error_str(exc)}")
 
     if report.source == SourceKind.UNAVAILABLE:
         report.notes.append(

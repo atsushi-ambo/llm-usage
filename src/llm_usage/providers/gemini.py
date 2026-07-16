@@ -19,7 +19,7 @@ from llm_usage.models import (
     SourceKind,
 )
 from llm_usage.pricing import estimate_cost
-from llm_usage.providers.base import parse_iso_date, safe_int
+from llm_usage.providers.base import parse_iso_date, safe_error_str, safe_int
 
 
 def collect_gemini(settings: Settings, start: date, end: date) -> ProviderReport:
@@ -60,7 +60,7 @@ def collect_gemini(settings: Settings, start: date, end: date) -> ProviderReport
                 "Spend dashboard: aistudio.google.com/usage (no public usage time-series API)."
             )
         except Exception as exc:  # noqa: BLE001
-            report.errors.append(f"Gemini API: {exc}")
+            report.errors.append(f"Gemini API: {safe_error_str(exc)}")
 
     if report.source == SourceKind.UNAVAILABLE:
         report.notes.append(
@@ -212,9 +212,11 @@ def _walk_gemini_obj(
 
 
 def _list_models(api_key: str) -> list[str]:
+    # Header auth (not `?key=` query param) so the key never ends up in a
+    # URL that gets echoed back into an httpx exception message.
     url = "https://generativelanguage.googleapis.com/v1beta/models"
     with httpx.Client(timeout=20.0) as client:
-        resp = client.get(url, params={"key": api_key})
+        resp = client.get(url, headers={"x-goog-api-key": api_key})
         resp.raise_for_status()
         body = resp.json()
     names: list[str] = []
