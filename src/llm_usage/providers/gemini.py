@@ -11,6 +11,7 @@ from typing import Any
 import httpx
 
 from llm_usage.config import Settings
+from llm_usage.logcache import scan_with_cache
 from llm_usage.models import (
     DailyPoint,
     ModelUsage,
@@ -108,15 +109,30 @@ def _scan_local_logs(root: Path, start: date, end: date) -> dict[str, Any]:
         if path in seen:
             continue
         seen.add(path)
-        try:
-            data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        try:
-            fallback_day = datetime.fromtimestamp(path.stat().st_mtime).date()
-        except OSError:
-            fallback_day = None
-        _walk_gemini_obj(data, start, end, by_model, by_day, totals, fallback_day)
+        for rec in scan_with_cache("gemini", path, _parse_gemini_file):
+            day = date.fromisoformat(rec["day"])
+            if day < start or day > end:
+                continue
+            model = rec["model"]
+            inp, out = rec["input_tokens"], rec["output_tokens"]
+            cost = estimate_cost(model, inp, out) or 0.0
+
+            m = by_model[model]
+            m["input_tokens"] += inp
+            m["output_tokens"] += out
+            m["requests"] += 1
+            m["cost_usd"] += cost
+
+            d = by_day[day]
+            d["input_tokens"] += inp
+            d["output_tokens"] += out
+            d["requests"] += 1
+            d["cost_usd"] += cost
+
+            totals["input_tokens"] += inp
+            totals["output_tokens"] += out
+            totals["requests"] += 1
+            totals["cost_usd"] += cost
 
     models = [
         ModelUsage(
@@ -141,18 +157,30 @@ def _scan_local_logs(root: Path, start: date, end: date) -> dict[str, Any]:
     return {**totals, "models": models, "daily": daily}
 
 
-def _walk_gemini_obj(
+def _parse_gemini_file(path: Path) -> list[dict[str, Any]]:
+    """Whole-file parse (no date filtering) so the cached result stays
+    valid across different --days windows; see llm_usage.logcache."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    try:
+        fallback_day = datetime.fromtimestamp(path.stat().st_mtime).date()
+    except OSError:
+        fallback_day = None
+    records: list[dict[str, Any]] = []
+    _collect_gemini_records(data, fallback_day, records)
+    return records
+
+
+def _collect_gemini_records(
     obj: Any,
-    start: date,
-    end: date,
-    by_model: dict[str, dict[str, int | float]],
-    by_day: dict[date, dict[str, int | float]],
-    totals: dict[str, int | float],
-    fallback_day: date | None = None,
+    fallback_day: date | None,
+    records: list[dict[str, Any]],
 ) -> None:
     if isinstance(obj, list):
         for item in obj:
-            _walk_gemini_obj(item, start, end, by_model, by_day, totals, fallback_day)
+            _collect_gemini_records(item, fallback_day, records)
         return
     if not isinstance(obj, dict):
         return
@@ -174,7 +202,7 @@ def _walk_gemini_obj(
             # *some* day bucket instead of being counted into every window.
             or fallback_day
         )
-        if day is not None and start <= day <= end:
+        if day is not None:
             model = str(
                 obj.get("model")
                 or obj.get("modelVersion")
@@ -197,25 +225,18 @@ def _walk_gemini_obj(
                 if total and not inp:
                     inp = total
             if inp or out:
-                cost = estimate_cost(model, inp, out) or 0.0
-                m = by_model[model]
-                m["input_tokens"] += inp
-                m["output_tokens"] += out
-                m["requests"] += 1
-                m["cost_usd"] += cost
-                totals["input_tokens"] += inp
-                totals["output_tokens"] += out
-                totals["requests"] += 1
-                totals["cost_usd"] += cost
-                d = by_day[day]
-                d["input_tokens"] += inp
-                d["output_tokens"] += out
-                d["requests"] += 1
-                d["cost_usd"] += cost
+                records.append(
+                    {
+                        "day": day.isoformat(),
+                        "model": model,
+                        "input_tokens": inp,
+                        "output_tokens": out,
+                    }
+                )
 
     for v in obj.values():
         if isinstance(v, (dict, list)):
-            _walk_gemini_obj(v, start, end, by_model, by_day, totals, fallback_day)
+            _collect_gemini_records(v, fallback_day, records)
 
 
 def _list_models(api_key: str) -> list[str]:

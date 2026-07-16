@@ -164,7 +164,10 @@ src/llm_usage/
   config.py              # env / .env settings
   models.py              # ProviderReport, AggregateReport
   pricing.py             # approximate $/MTok table
+  logcache.py            # per-file cache for local log scanning
+  serialize.py           # report -> dict, redacting raw upstream payloads
   providers/
+    __init__.py          # collect_all / collect_all_cached
     claude.py            # local JSONL + Admin API + OAuth usage
     openai_provider.py   # org usage + costs
     xai.py               # models / management keys
@@ -173,9 +176,29 @@ src/llm_usage/
   dashboard/
     app.py               # FastAPI
     static/index.html    # single-page UI
+  menubar.py              # macOS menu bar (rumps)
 ```
 
 All collection is **read-only**. No data is uploaded; the dashboard binds to `127.0.0.1` by default.
+
+### Caching
+
+Two independent caches keep repeated invocations cheap and providers'
+rate limits happy:
+
+- **Per-file log cache** (`logcache.py`): each local log file (Claude Code
+  session, Codex rollout, Grok's unified log, a Gemini CLI chat file) is
+  parsed once and cached by an `(mtime, size)` fingerprint under
+  `~/.config/llm-usage/cache/logscan/`. Unchanged files are never
+  re-parsed, so collection cost stops growing with total history — this is
+  what keeps `llm-usage menubar`'s 2-minute poll cheap after months of use.
+- **Shared report snapshot** (`collect_all_cached` in `providers/__init__.py`):
+  the full collected report is cached on disk for 60 seconds by default, so
+  the CLI, dashboard, and menubar landing close together in time reuse one
+  collection instead of each independently re-hitting every provider API.
+  Pass `--fresh` to `llm-usage`/`show`/`export`, click "Refresh" in the
+  dashboard (`?refresh=1`), or click "Refresh Now" in the menubar to bypass
+  it.
 
 ### Dashboard security
 
