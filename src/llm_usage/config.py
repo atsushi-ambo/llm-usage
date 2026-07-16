@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     gemini_api_key: str | None = Field(default=None, alias="GEMINI_API_KEY")
     google_cloud_project: str | None = Field(default=None, alias="GOOGLE_CLOUD_PROJECT")
 
+    # OpenRouter
+    openrouter_api_key: str | None = Field(default=None, alias="OPENROUTER_API_KEY")
+
     # App
     days: int = Field(default=30, alias="LLM_USAGE_DAYS")
     port: int = Field(default=8765, alias="LLM_USAGE_PORT")

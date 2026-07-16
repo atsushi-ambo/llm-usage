@@ -21,6 +21,7 @@
       --cursor: #60a5fa;
       --gemini: #fbbf24;
       --codex: #22c55e;
+      --openrouter: #2dd4bf;
     }
     * { box-sizing: border-box; }
     body {
@@ -105,6 +106,7 @@
     .provider.grok::before { background: var(--grok); }
     .provider.cursor::before { background: var(--cursor); }
     .provider.gemini::before { background: var(--gemini); }
+    .provider.openrouter::before { background: var(--openrouter); }
     .provider h2 {
       margin: 0 0 .35rem;
       font-size: 1rem;
@@ -248,6 +250,7 @@
       grok: '#a78bfa',
       cursor: '#60a5fa',
       gemini: '#fbbf24',
+      openrouter: '#2dd4bf',
     };
 
     const $ = (id) => document.getElementById(id);
@@ -258,7 +261,7 @@
       return String(s).replace(/[&<>"']/g, (c) => ESC_MAP[c]);
     }
     // Only these provider ids are used as CSS class names / lookups.
-    const KNOWN_PROVIDERS = new Set(['claude', 'openai', 'codex', 'grok', 'cursor', 'gemini']);
+    const KNOWN_PROVIDERS = new Set(['claude', 'openai', 'codex', 'grok', 'cursor', 'gemini', 'openrouter']);
     function safeProviderClass(p) {
       return KNOWN_PROVIDERS.has(p) ? p : 'unknown';
     }
@@ -269,6 +272,7 @@
       'console.x.ai', 'x.ai',
       'cursor.com', 'www.cursor.com',
       'aistudio.google.com',
+      'openrouter.ai',
     ]);
     function safeUrl(u) {
       if (!u) return null;

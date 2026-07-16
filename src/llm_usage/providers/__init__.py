@@ -11,6 +11,7 @@ from llm_usage.providers.codex import collect_codex
 from llm_usage.providers.cursor import collect_cursor
 from llm_usage.providers.gemini import collect_gemini
 from llm_usage.providers.openai_provider import collect_openai
+from llm_usage.providers.openrouter import collect_openrouter
 from llm_usage.providers.xai import collect_xai
 from llm_usage.quota import read_json_cache, write_json_cache
 
@@ -43,6 +44,7 @@ def collect_all(settings: Settings, days: int | None = None) -> AggregateReport:
         collect_xai(settings, start, end),
         collect_cursor(settings, start, end),
         collect_gemini(settings, start, end),
+        collect_openrouter(settings, start, end),
     ]
 
     return AggregateReport(period_start=start, period_end=end, providers=reports)

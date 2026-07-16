@@ -8,7 +8,10 @@ import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from llm_usage.models import ProviderReport
 
 
 def cache_dir() -> Path:
@@ -193,3 +196,21 @@ def claude_quota_from_oauth(data: dict[str, Any], *, plan: str | None = None) ->
         "resets_at": primary.get("resets_at"),
         "windows": windows,
     }
+
+
+def quota_windows(p: "ProviderReport") -> list[tuple[str, float]]:
+    """(label, used_percent) for every distinct quota window a provider
+    reports. Claude's `windows` list already includes an entry equivalent
+    to its top-level quota, so only fall back to the top-level figure for
+    providers (Codex, Grok) that don't expose a `windows` breakdown."""
+    q = (p.meta or {}).get("quota") or {}
+    windows = q.get("windows") or []
+    if windows:
+        return [
+            (w.get("label") or w.get("key") or "window", float(w["used_percent"]))
+            for w in windows
+            if w.get("used_percent") is not None
+        ]
+    if q.get("used_percent") is not None:
+        return [(q.get("label") or "quota", float(q["used_percent"]))]
+    return []

@@ -10,6 +10,7 @@ from typing import Optional
 import typer
 from rich import box
 from rich.console import Console
+from rich.markup import escape as rich_escape
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -19,6 +20,7 @@ from llm_usage.config import load_settings
 from llm_usage.history import daily_totals, sparkline, week_over_week_pct, weekly_buckets
 from llm_usage.models import AggregateReport, ProviderReport, SourceKind
 from llm_usage.providers import collect_all_cached
+from llm_usage.quota import quota_windows
 from llm_usage.serialize import report_to_dict
 
 app = typer.Typer(
@@ -48,7 +50,7 @@ def main(
         None,
         "--provider",
         "-p",
-        help="Filter: claude, openai, codex, grok, cursor, gemini",
+        help="Filter: claude, openai, codex, grok, cursor, gemini, openrouter",
     ),
     fresh: bool = typer.Option(
         False,
@@ -215,6 +217,11 @@ def status_cmd() -> None:
             f"Local CLI logs ({settings.gemini_home_dir})",
             "found" if settings.gemini_home_dir.exists() else "missing",
         ),
+        (
+            "OpenRouter",
+            "API key",
+            "ready" if settings.openrouter_api_key else "—",
+        ),
     ]
     for provider, source, status in rows:
         style = (
@@ -228,6 +235,98 @@ def status_cmd() -> None:
     console.print(
         "\n[dim]Copy .env.example → .env (or ~/.config/llm-usage/.env) and add keys.[/dim]"
     )
+
+
+@app.command("doctor")
+def doctor_cmd() -> None:
+    """Live-check every configured source and explain what's wrong, if anything.
+
+    Unlike `status` (which only checks that credential files/dirs exist),
+    this runs a real collection — hitting live provider APIs — and reports
+    per-provider health from the same errors/notes the normal collectors
+    already produce.
+    """
+    settings = load_settings()
+    with console.status("Running diagnostics (live checks, bypassing cache)…"):
+        report = collect_all_cached(settings, days=7, force_refresh=True)
+
+    table = Table(title="llm-usage doctor", box=box.ROUNDED)
+    table.add_column("Provider", style="bold")
+    table.add_column("Status")
+    table.add_column("Details")
+
+    healthy = True
+    for p in report.providers:
+        configured = p.source != SourceKind.UNAVAILABLE or bool(p.errors)
+        if not configured:
+            status = Text("not configured", style="dim")
+        elif p.errors and p.source == SourceKind.UNAVAILABLE:
+            status = Text("error", style="red")
+            healthy = False
+        elif p.errors:
+            status = Text("partial", style="yellow")
+            healthy = False
+        else:
+            status = Text("ok", style="green")
+
+        details = []
+        if p.errors:
+            details.extend(rich_escape(e) for e in p.errors[:3])
+        elif p.notes:
+            details.append(rich_escape(p.notes[0][:140]))
+        table.add_row(p.display_name, status, "\n".join(details) or "—")
+
+    console.print(table)
+    if healthy:
+        console.print("[green]All configured sources look healthy.[/green]")
+    else:
+        console.print(
+            "[yellow]Some sources need attention — see Details above.[/yellow]"
+        )
+        raise typer.Exit(1)
+
+
+@app.command("check")
+def check_cmd(
+    fail_at: float = typer.Option(
+        90.0,
+        "--fail-at",
+        help="Exit 1 if any tracked quota window is at or above this percent.",
+    ),
+    fresh: bool = typer.Option(
+        False,
+        "--fresh",
+        help="Bypass the shared snapshot cache and force a live collection.",
+    ),
+) -> None:
+    """Scriptable quota check for cron/CI: non-zero exit if any provider's
+    quota window is at or above --fail-at (default 90%)."""
+    settings = load_settings()
+    with console.status("Checking quotas…"):
+        report = collect_all_cached(settings, days=7, force_refresh=fresh)
+
+    table = Table(box=box.SIMPLE, show_edge=False)
+    table.add_column("Provider")
+    table.add_column("Window")
+    table.add_column("Used", justify="right")
+
+    breached: list[tuple[str, str, float]] = []
+    for p in report.providers:
+        for label, pct in quota_windows(p):
+            style = "red" if pct >= fail_at else ("yellow" if pct >= fail_at * 0.75 else "")
+            table.add_row(
+                p.display_name, label, f"[{style}]{pct:.0f}%[/{style}]" if style else f"{pct:.0f}%"
+            )
+            if pct >= fail_at:
+                breached.append((p.display_name, label, pct))
+
+    console.print(table)
+    if breached:
+        console.print(f"\n[red]⚠ {len(breached)} window(s) at/above {fail_at:.0f}%:[/red]")
+        for name, label, pct in breached:
+            console.print(f"  · {name} — {label}: {pct:.0f}%")
+        raise typer.Exit(1)
+    console.print(f"\n[green]All tracked quota windows below {fail_at:.0f}%.[/green]")
 
 
 @app.command("export")

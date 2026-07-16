@@ -99,6 +99,7 @@ LLM_USAGE_ENV_FILE=.env llm-usage status
 | **Grok Build (X Premium)** | Parses `~/.grok/logs/unified.jsonl` (tokens + weekly credit %). Sessions under `~/.grok/sessions/`. | Optional `XAI_API_KEY` for separate pay-as-you-go API |
 | **Cursor** | Console link | `CURSOR_API_KEY` or `CURSOR_SESSION_TOKEN` |
 | **Gemini** | Parses `~/.gemini/**` CLI chat logs when present | `GEMINI_API_KEY` |
+| **OpenRouter** | — | `OPENROUTER_API_KEY` → pay-as-you-go credit/spend |
 
 ### Codex free plan & Grok Build
 
@@ -141,6 +142,7 @@ Environment variables (also loaded from `.env` or `~/.config/llm-usage/.env`):
 | `CURSOR_API_KEY` | Cursor Enterprise Admin API key |
 | `CURSOR_SESSION_TOKEN` | Browser cookie `WorkosCursorSessionToken` |
 | `GEMINI_API_KEY` | Google AI Studio / Generative Language key |
+| `OPENROUTER_API_KEY` | openrouter.ai/keys — pay-as-you-go credit/spend |
 | `LLM_USAGE_DAYS` | Default lookback (30) |
 | `LLM_USAGE_PORT` | Dashboard port (8765) |
 
@@ -175,6 +177,7 @@ src/llm_usage/
     xai.py               # models / management keys
     cursor.py            # admin + dashboard session
     gemini.py            # local CLI logs + models list
+    openrouter.py        # pay-as-you-go credit/spend
   dashboard/
     app.py               # FastAPI
     static/index.html    # single-page UI
