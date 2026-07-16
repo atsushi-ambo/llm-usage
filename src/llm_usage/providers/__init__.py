@@ -12,6 +12,17 @@ from llm_usage.providers.cursor import collect_cursor
 from llm_usage.providers.gemini import collect_gemini
 from llm_usage.providers.openai_provider import collect_openai
 from llm_usage.providers.xai import collect_xai
+from llm_usage.quota import read_json_cache, write_json_cache
+
+# Most provider collectors have no caching of their own (Claude's OAuth quota
+# is the one exception — see quota.py) and every collect_all() call hits
+# every configured provider API unconditionally. Multiple frontends can run
+# close together (a dashboard page load right after a menubar poll, a CLI
+# invocation while the dashboard is open) and each used to trigger its own
+# independent round of live API calls. This is the default TTL for
+# collect_all_cached()'s disk-backed snapshot, which lets near-simultaneous
+# callers share one collection instead.
+DEFAULT_SNAPSHOT_TTL_S = 60.0
 
 
 def collect_all(settings: Settings, days: int | None = None) -> AggregateReport:
@@ -35,6 +46,38 @@ def collect_all(settings: Settings, days: int | None = None) -> AggregateReport:
     ]
 
     return AggregateReport(period_start=start, period_end=end, providers=reports)
+
+
+def collect_all_cached(
+    settings: Settings,
+    days: int | None = None,
+    *,
+    ttl_s: float = DEFAULT_SNAPSHOT_TTL_S,
+    force_refresh: bool = False,
+) -> AggregateReport:
+    """collect_all(), reused across processes/frontends for `ttl_s` seconds
+    via a disk-backed snapshot (~/.config/llm-usage/cache). CLI, dashboard,
+    and menubar invocations that land within the same window share one
+    collection instead of each independently re-hitting every provider API.
+
+    Keyed only by the resolved --days window — fine for this single-user
+    local tool, where credentials/settings are stable across invocations.
+    """
+    window = days if days is not None else settings.days
+    cache_name = f"report_snapshot_{window}.json"
+
+    if not force_refresh and ttl_s > 0:
+        cached = read_json_cache(cache_name, max_age_s=ttl_s)
+        if cached is not None:
+            try:
+                return AggregateReport.model_validate(cached)
+            except Exception:  # noqa: BLE001
+                pass  # corrupt/incompatible cache entry — fall through
+
+    report = collect_all(settings, days=days)
+    if ttl_s > 0:
+        write_json_cache(cache_name, report.model_dump(mode="json"))
+    return report
 
 
 def _merge_openai_family(codex: ProviderReport, openai: ProviderReport) -> ProviderReport:
@@ -156,4 +199,4 @@ def _merge_openai_family(codex: ProviderReport, openai: ProviderReport) -> Provi
     return merged
 
 
-__all__ = ["collect_all"]
+__all__ = ["collect_all", "collect_all_cached"]

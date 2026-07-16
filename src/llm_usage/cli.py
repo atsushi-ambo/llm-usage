@@ -16,7 +16,7 @@ from rich.text import Text
 from llm_usage import __version__
 from llm_usage.config import load_settings
 from llm_usage.models import AggregateReport, ProviderReport, SourceKind
-from llm_usage.providers import collect_all
+from llm_usage.providers import collect_all_cached
 from llm_usage.serialize import report_to_dict
 
 app = typer.Typer(
@@ -48,6 +48,11 @@ def main(
         "-p",
         help="Filter: claude, openai, codex, grok, cursor, gemini",
     ),
+    fresh: bool = typer.Option(
+        False,
+        "--fresh",
+        help="Bypass the shared snapshot cache and force a live collection.",
+    ),
     version: bool = typer.Option(False, "--version", help="Show version and exit"),
 ) -> None:
     """Show a unified usage summary (default command)."""
@@ -56,7 +61,7 @@ def main(
         raise typer.Exit(0)
     if ctx.invoked_subcommand is not None:
         return
-    _show(days=days, fmt=fmt, provider=provider)
+    _show(days=days, fmt=fmt, provider=provider, fresh=fresh)
 
 
 @app.command("show")
@@ -64,9 +69,14 @@ def show_cmd(
     days: Optional[int] = typer.Option(None, "--days", "-d"),
     fmt: OutputFormat = typer.Option(OutputFormat.table, "--format", "-f"),
     provider: Optional[str] = typer.Option(None, "--provider", "-p"),
+    fresh: bool = typer.Option(
+        False,
+        "--fresh",
+        help="Bypass the shared snapshot cache and force a live collection.",
+    ),
 ) -> None:
     """Collect and display usage for all configured providers."""
-    _show(days=days, fmt=fmt, provider=provider)
+    _show(days=days, fmt=fmt, provider=provider, fresh=fresh)
 
 
 @app.command("dashboard")
@@ -229,6 +239,11 @@ def export_cmd(
         "snapshots, API-key listings) in the export. Off by default since "
         "these can be sensitive.",
     ),
+    fresh: bool = typer.Option(
+        False,
+        "--fresh",
+        help="Bypass the shared snapshot cache and force a live collection.",
+    ),
 ) -> None:
     """Write a JSON usage report to disk."""
     import json
@@ -236,7 +251,7 @@ def export_cmd(
 
     settings = load_settings()
     with console.status("Collecting usage…"):
-        report = collect_all(settings, days=days)
+        report = collect_all_cached(settings, days=days, force_refresh=fresh)
     data = report_to_dict(report, include_raw_meta=include_raw)
     output.write_text(json.dumps(data, indent=2), encoding="utf-8")
     try:
@@ -250,10 +265,11 @@ def _show(
     days: Optional[int],
     fmt: OutputFormat,
     provider: Optional[str],
+    fresh: bool = False,
 ) -> None:
     settings = load_settings()
     with console.status("Collecting usage from providers…"):
-        report = collect_all(settings, days=days)
+        report = collect_all_cached(settings, days=days, force_refresh=fresh)
 
     if provider:
         want = provider.lower().strip()
