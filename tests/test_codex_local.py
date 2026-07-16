@@ -37,7 +37,9 @@ def test_scan_codex_sessions(tmp_path: Path):
     result = _scan_sessions(tmp_path, date(2026, 7, 1), date(2026, 7, 10))
     assert result["requests"] == 1
     assert result["input_tokens"] == 1000
-    assert result["output_tokens"] == 60
+    # output_tokens (50) already includes reasoning_output_tokens (10) as a
+    # subset — they must not be summed.
+    assert result["output_tokens"] == 50
     assert result["cache_read_tokens"] == 200
     assert result["plan_type"] == "free"
     assert result["models"][0].model == "gpt-5.1-codex"

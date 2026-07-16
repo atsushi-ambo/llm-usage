@@ -5,9 +5,33 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
+import httpx
+
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def safe_error_str(exc: BaseException, limit: int = 200) -> str:
+    """Render an exception for display in errors/notes: strip query strings
+    (which can carry API keys, e.g. `?key=...`) from httpx URLs and cap
+    length so a raw response/traceback dump doesn't flood the UI."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        url = exc.request.url
+        location = f"{url.scheme}://{url.host}{url.path}"
+        body = exc.response.text
+        msg = f"HTTP {exc.response.status_code} for {location}"
+        if body:
+            msg += f": {body}"
+    elif isinstance(exc, httpx.RequestError):
+        url = exc.request.url if exc.request is not None else None
+        location = f"{url.scheme}://{url.host}{url.path}" if url is not None else "request"
+        msg = f"{type(exc).__name__} for {location}"
+    else:
+        msg = str(exc)
+    if len(msg) > limit:
+        msg = msg[: limit - 1] + "…"
+    return msg
 
 
 def day_range(start: date, end: date) -> list[date]:

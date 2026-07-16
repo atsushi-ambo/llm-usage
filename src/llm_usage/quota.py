@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +21,24 @@ def cache_dir() -> Path:
         except OSError:
             pass
     return d
+
+
+def atomic_write_json(path: Path, data: dict[str, Any]) -> None:
+    """Write JSON with 0600 perms from creation — no window where the file
+    briefly exists at the process' default umask before we chmod it.
+    `tempfile.mkstemp` creates its file with mode 0600 already; we just
+    write into it and rename it into place."""
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2)
+        os.replace(tmp_name, path)
+    except OSError:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 def _read_cache_file(name: str) -> dict[str, Any] | None:
@@ -49,11 +68,7 @@ def read_json_cache(name: str, max_age_s: float = 3600) -> dict[str, Any] | None
 def write_json_cache(name: str, payload: dict[str, Any]) -> None:
     path = cache_dir() / name
     try:
-        path.write_text(
-            json.dumps({"_cached_at": time.time(), "payload": payload}, indent=2),
-            encoding="utf-8",
-        )
-        os.chmod(path, 0o600)
+        atomic_write_json(path, {"_cached_at": time.time(), "payload": payload})
     except OSError:
         pass
 
@@ -65,6 +80,19 @@ def read_json_cache_stale(name: str) -> dict[str, Any] | None:
         return None
     body = data.get("payload")
     return body if isinstance(body, dict) else None
+
+
+_DASHBOARD_SESSION_FILE = "dashboard_session.json"
+
+
+def write_dashboard_session(token: str, host: str, port: int) -> None:
+    """Record the running dashboard's auth token so the menubar (same user,
+    same trust boundary as the CLI) can open an authenticated browser tab."""
+    write_json_cache(_DASHBOARD_SESSION_FILE, {"token": token, "host": host, "port": port})
+
+
+def read_dashboard_session() -> dict[str, Any] | None:
+    return read_json_cache_stale(_DASHBOARD_SESSION_FILE)
 
 
 def cooldown_remaining(name: str) -> float:
@@ -82,10 +110,7 @@ def write_cooldown(name: str, seconds: float) -> None:
     """Remember that an endpoint is rate limited; skip requests until it expires."""
     path = cache_dir() / f"{name}.cooldown"
     try:
-        path.write_text(
-            json.dumps({"until": time.time() + max(0.0, seconds)}), encoding="utf-8"
-        )
-        os.chmod(path, 0o600)
+        atomic_write_json(path, {"until": time.time() + max(0.0, seconds)})
     except OSError:
         pass
 

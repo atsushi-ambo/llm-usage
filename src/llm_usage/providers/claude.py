@@ -19,7 +19,7 @@ from llm_usage.models import (
     SourceKind,
 )
 from llm_usage.pricing import estimate_cost
-from llm_usage.providers.base import parse_iso_date, safe_float, safe_int
+from llm_usage.providers.base import parse_iso_date, safe_error_str, safe_float, safe_int
 from llm_usage.quota import (
     claude_quota_from_oauth,
     clear_cooldown,
@@ -53,7 +53,7 @@ def collect_claude(settings: Settings, start: date, end: date) -> ProviderReport
             _fill_from_admin_api(report, settings.anthropic_admin_key, start, end)
             report.source = SourceKind.API
         except Exception as exc:  # noqa: BLE001
-            report.errors.append(f"Admin API: {exc}")
+            report.errors.append(f"Admin API: {safe_error_str(exc)}")
 
     # 2) Local Claude Code transcripts (always useful; fills gaps)
     local = _scan_local_logs(settings.claude_projects_dir, start, end)
@@ -112,12 +112,12 @@ def collect_claude(settings: Settings, start: date, end: date) -> ProviderReport
                     report.meta["quota_stale"] = True
                     report.notes.append(
                         f"Claude quota from cache ({q.get('label')}: "
-                        f"{q['used_percent']:.0f}%) — live API: {exc}"
+                        f"{q['used_percent']:.0f}%) — live API: {safe_error_str(exc)}"
                     )
                 else:
-                    report.errors.append(f"OAuth usage: {exc}")
+                    report.errors.append(f"OAuth usage: {safe_error_str(exc)}")
             else:
-                report.errors.append(f"OAuth usage: {exc}")
+                report.errors.append(f"OAuth usage: {safe_error_str(exc)}")
                 if cred_meta.get("plan"):
                     report.notes.append(
                         f"Claude Code plan={cred_meta['plan']} "
@@ -178,7 +178,14 @@ def _scan_local_logs(root: Path, start: date, end: date) -> dict[str, Any]:
         }
     )
     by_day: dict[date, dict[str, int | float]] = defaultdict(
-        lambda: {"input_tokens": 0, "output_tokens": 0, "requests": 0, "cost_usd": 0.0}
+        lambda: {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "requests": 0,
+            "cost_usd": 0.0,
+        }
     )
     sessions = 0
     totals = {
@@ -223,6 +230,8 @@ def _scan_local_logs(root: Path, start: date, end: date) -> dict[str, Any]:
             day=d,
             input_tokens=int(v["input_tokens"]),
             output_tokens=int(v["output_tokens"]),
+            cache_read_tokens=int(v["cache_read_tokens"]),
+            cache_write_tokens=int(v["cache_write_tokens"]),
             requests=int(v["requests"]),
             cost_usd=float(v["cost_usd"]) if v["cost_usd"] else None,
         )
@@ -286,6 +295,8 @@ def _accumulate_row(
     d = by_day[day]
     d["input_tokens"] += inp
     d["output_tokens"] += out
+    d["cache_read_tokens"] += cache_r
+    d["cache_write_tokens"] += cache_w
     d["requests"] += 1
     d["cost_usd"] += cost
 
@@ -355,7 +366,7 @@ def _fill_from_admin_api(
             if total_cents:
                 report.cost_usd = total_cents / 100.0
         except Exception as exc:  # noqa: BLE001
-            report.errors.append(f"Cost API: {exc}")
+            report.errors.append(f"Cost API: {safe_error_str(exc)}")
 
 
 def _paginate(
@@ -423,6 +434,8 @@ def _merge_usage_buckets(report: ProviderReport, pages: list[dict[str, Any]]) ->
                     dp = by_day.get(bucket_start) or DailyPoint(day=bucket_start)
                     dp.input_tokens += inp
                     dp.output_tokens += out
+                    dp.cache_read_tokens += cache_r
+                    dp.cache_write_tokens += cache_w
                     dp.requests += reqs or (1 if (inp or out) else 0)
                     if est is not None:
                         dp.cost_usd = (dp.cost_usd or 0.0) + est
