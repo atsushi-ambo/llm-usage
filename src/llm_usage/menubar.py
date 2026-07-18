@@ -27,39 +27,37 @@ NOTIFY_THRESHOLDS = (70, 90)
 # Default: Grok in the menu bar (user can switch)
 DEFAULT_FOCUS = "grok"
 
-# VS Code Dark+ syntax colors — tuned for a dark menu (forced below).
-# https://code.visualstudio.com/api/references/theme-color
+# Gaming / neon HUD palette — bright fills that read on dark chrome.
 PROVIDER_STYLE: dict[str, dict] = {
-    # #CE9178 strings
-    "claude": {"letter": "C", "short": "Claude", "rgb": (206, 145, 120)},
-    # #4EC9B0 types
-    "codex": {"letter": "X", "short": "Codex", "rgb": (78, 201, 176)},
-    # #6A9955 comments
-    "openai": {"letter": "O", "short": "OpenAI", "rgb": (106, 153, 85)},
-    # #C586C0 keywords
-    "grok": {"letter": "G", "short": "Grok", "rgb": (197, 134, 192)},
-    # #569CD6 language keywords / links
-    "cursor": {"letter": "Cu", "short": "Cursor", "rgb": (86, 156, 214)},
-    # #DCDCAA functions
-    "gemini": {"letter": "Ge", "short": "Gemini", "rgb": (220, 220, 170)},
-    # #9CDCFE variables
-    "openrouter": {"letter": "Or", "short": "OpenRouter", "rgb": (156, 220, 254)},
+    # neon orange
+    "claude": {"letter": "C", "short": "Claude", "rgb": (255, 122, 45)},
+    # neon green
+    "codex": {"letter": "X", "short": "Codex", "rgb": (57, 255, 20)},
+    # matrix green
+    "openai": {"letter": "O", "short": "OpenAI", "rgb": (0, 230, 118)},
+    # electric magenta
+    "grok": {"letter": "G", "short": "Grok", "rgb": (224, 64, 251)},
+    # electric blue
+    "cursor": {"letter": "Cu", "short": "Cursor", "rgb": (0, 180, 255)},
+    # neon gold
+    "gemini": {"letter": "Ge", "short": "Gemini", "rgb": (255, 214, 0)},
+    # cyan laser
+    "openrouter": {"letter": "Or", "short": "OpenRouter", "rgb": (0, 245, 255)},
 }
 
 FOCUS_ORDER = ["grok", "codex", "claude", "cursor", "gemini", "openrouter", "openai"]
 
-# Usage heat — only kicks in at high %; low/mid stays on brand color.
-_RGB_OK = (78, 201, 176)  # #4EC9B0
-_RGB_WARN = (220, 220, 170)  # #DCDCAA
-_RGB_HOT = (206, 145, 120)  # #CE9178
-_RGB_CRIT = (244, 71, 71)  # #F44747
-# Empty track on dark menus needs mid-grey so ░ segments are visible
-_RGB_EMPTY = (90, 90, 94)  # between #3C3C3C and #6B6B6B
-_RGB_MUTED = (156, 156, 156)  # slightly brighter than #858585 for dark bg
-_RGB_TITLE = (212, 212, 212)  # #D4D4D4 editor.foreground
-_RGB_ACCENT = (0, 122, 204)  # #007ACC
-_RGB_LINK = (86, 156, 214)  # #569CD6
-_RGB_STRING = (206, 145, 120)  # #CE9178
+# Usage heat — brand neon until high load, then warn → crit.
+_RGB_OK = (57, 255, 20)  # neon green
+_RGB_WARN = (255, 230, 0)  # warning yellow
+_RGB_HOT = (255, 109, 0)  # hot orange
+_RGB_CRIT = (255, 23, 68)  # alert red
+_RGB_EMPTY = (48, 48, 64)  # dark HUD track
+_RGB_MUTED = (140, 145, 170)  # cool grey
+_RGB_TITLE = (236, 240, 255)  # near-white HUD text
+_RGB_ACCENT = (0, 180, 255)  # electric blue
+_RGB_LINK = (0, 200, 255)  # cyan link
+_RGB_STRING = (255, 122, 45)  # neon orange
 
 
 def _load_prefs() -> dict:
@@ -183,7 +181,7 @@ def _lerp_rgb(
 def _bar_segments(
     pct: float, width: int, brand: tuple[int, int, int]
 ) -> list[tuple[str, tuple[int, int, int]]]:
-    """Per-cell bar in brand color; only heats toward error red at high %."""
+    """Neon bar: solid brand fill, heat toward red when the meter is hot."""
     filled = int(round((pct / 100.0) * width))
     filled = max(0, min(width, filled))
     segs: list[tuple[str, tuple[int, int, int]]] = []
@@ -191,11 +189,10 @@ def _bar_segments(
         if i < filled:
             t = (i + 1) / max(width, 1)
             if pct >= 90:
-                color = _lerp_rgb(brand, _RGB_CRIT, 0.35 + 0.65 * t)
+                color = _lerp_rgb(brand, _RGB_CRIT, 0.4 + 0.6 * t)
             elif pct >= 75:
-                color = _lerp_rgb(brand, _RGB_HOT, 0.25 + 0.5 * t)
+                color = _lerp_rgb(brand, _RGB_HOT, 0.3 + 0.55 * t)
             else:
-                # Solid brand fill — VS Code syntax colors, not a rainbow.
                 color = brand
             segs.append(("█", color))
         else:
@@ -324,15 +321,16 @@ def _render_single_bar_icon(pct: float, rgb: tuple[int, int, int]) -> Path | Non
         y = pad
         radius = bar_h / 2
 
-        # Dark editor background track (#252526)
-        NSColor.colorWithCalibratedRed_green_blue_alpha_(0.145, 0.145, 0.149, 1.0).set()
+        # Dark HUD track
+        NSColor.colorWithCalibratedRed_green_blue_alpha_(0.10, 0.10, 0.14, 1.0).set()
         track = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
             NSMakeRect(pad, y, track_w, bar_h), radius, radius
         )
         track.fill()
-        # Thin border like VS Code widget border (#3C3C3C)
-        NSColor.colorWithCalibratedRed_green_blue_alpha_(0.235, 0.235, 0.235, 1.0).set()
-        track.setLineWidth_(0.75)
+        # Neon-ish edge using brand color at low alpha
+        br, bg, bb = rgb[0] / 255.0, rgb[1] / 255.0, rgb[2] / 255.0
+        NSColor.colorWithCalibratedRed_green_blue_alpha_(br, bg, bb, 0.45).set()
+        track.setLineWidth_(1.0)
         track.stroke()
 
         fill_rgb = _bar_color_for_pct(pct, rgb)
@@ -344,10 +342,10 @@ def _render_single_bar_icon(pct: float, rgb: tuple[int, int, int]) -> Path | Non
                 NSMakeRect(pad, y, min(fill_w, track_w), bar_h), radius, radius
             )
             fill.fill()
-            # Soft highlight (editor-widget)
-            NSColor.colorWithCalibratedRed_green_blue_alpha_(1.0, 1.0, 1.0, 0.10).set()
+            # Bright specular for "lit LED" feel
+            NSColor.colorWithCalibratedRed_green_blue_alpha_(1.0, 1.0, 1.0, 0.28).set()
             hi = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
-                NSMakeRect(pad + 1, y + bar_h * 0.18, min(fill_w, track_w) - 2, bar_h * 0.28),
+                NSMakeRect(pad + 1, y + bar_h * 0.15, min(fill_w, track_w) - 2, bar_h * 0.32),
                 2,
                 2,
             )
