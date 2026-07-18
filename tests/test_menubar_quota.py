@@ -42,6 +42,7 @@ def test_claude_display_quota_uses_five_hour_reset_time():
     dq = _display_quota(p)
     assert dq["resets_at"] == "2026-07-17T00:59:00Z"
     assert dq["label"] == "5-hour"
+    assert dq["used_percent"] == 65.0
 
 
 def test_claude_falls_back_to_primary_when_no_five_hour_window():

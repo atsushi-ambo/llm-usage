@@ -105,11 +105,16 @@ def collect_claude(settings: Settings, start: date, end: date) -> ProviderReport
                 if cred_meta.get("source") == "keychain":
                     note += " · live"
                 report.notes.append(note)
+                # Secondary windows (primary is already in the headline note)
+                primary_label = (q.get("label") or "").replace(" limit", "").strip()
                 for w in q.get("windows") or []:
-                    if w.get("key") != "seven_day" and w.get("used_percent") is not None:
-                        report.notes.append(
-                            f"  {w['label']}: {w['used_percent']:.0f}% used"
-                        )
+                    if w.get("used_percent") is None:
+                        continue
+                    if (w.get("label") or "").strip() == primary_label:
+                        continue
+                    report.notes.append(
+                        f"  {w['label']}: {w['used_percent']:.0f}% used"
+                    )
             else:
                 report.notes.append("Claude OAuth usage returned (no utilization fields)")
         except Exception as exc:  # noqa: BLE001

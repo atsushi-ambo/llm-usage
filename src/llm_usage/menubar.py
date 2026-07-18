@@ -78,14 +78,14 @@ def _quota_crossings(
 def _display_quota(p: ProviderReport) -> dict | None:
     """Quota dict to use for the provider's headline %/reset in the menu bar.
 
-    For Claude, this is the 5-hour window rather than the 7-day window
-    claude_quota_from_oauth() treats as "primary" for the CLI/dashboard's
-    single headline number: 5-hour resets every few hours and is what
-    actually blocks you next, so it's the more useful at-a-glance signal
-    for something you're glancing at near the clock. The 7-day figure is
-    still shown as one of the sub-window rows underneath.
+    Claude's primary (via claude_quota_from_oauth) is already the 5-hour
+    window. As a belt-and-suspenders fallback, if a report still has a
+    top-level 7-day headline but includes a five_hour window, prefer that
+    for the clock-adjacent glance — 5-hour is what blocks you next.
     """
     q = (p.meta or {}).get("quota") or {}
+    if q.get("used_percent") is None and not q.get("windows"):
+        return None
     if p.provider == ProviderId.CLAUDE:
         windows = q.get("windows") or []
         five_hour = next((w for w in windows if w.get("key") == "five_hour"), None)
@@ -93,9 +93,9 @@ def _display_quota(p: ProviderReport) -> dict | None:
             return {
                 "used_percent": five_hour.get("used_percent"),
                 "resets_at": five_hour.get("resets_at"),
-                "label": five_hour.get("label"),
+                "label": five_hour.get("label") or "5-hour",
                 "plan": q.get("plan"),
-                "windows": q.get("windows"),
+                "windows": windows,
             }
     return q if q.get("used_percent") is not None else None
 
@@ -337,12 +337,16 @@ def run_menubar() -> None:
                     bar = _unicode_bar(pct, 12)
                     q = _display_quota(p) or {}
                     plan = q.get("plan") or ""
-                    label = q.get("label") or "quota"
+                    label = (q.get("label") or "").replace(" limit", "").strip()
+                    # e.g. "C  Claude Code  ████████░░  65%  ·  5-hour  ·  pro"
                     line = f"{style['letter']}  {p.display_name}  {bar}  {pct:.0f}%"
+                    if label:
+                        line += f"  ·  {label}"
                     if plan:
                         line += f"  ·  {plan}"
                     item = add_enabled(line)
-                    # Sub-windows
+                    # Sub-windows: show every window so 5-hour + 7-day are both
+                    # visible without hunting; the headline % matches 5-hour.
                     for w in q.get("windows") or []:
                         if w.get("used_percent") is None:
                             continue
@@ -357,7 +361,12 @@ def run_menubar() -> None:
                     if reset:
                         try:
                             d = datetime.fromisoformat(str(reset).replace("Z", "+00:00"))
-                            sub = rumps.MenuItem(f"    Resets {d.strftime('%b %d, %H:%M')}")
+                            reset_label = (
+                                f"    {label} resets {d.strftime('%b %d, %H:%M')}"
+                                if label
+                                else f"    Resets {d.strftime('%b %d, %H:%M')}"
+                            )
+                            sub = rumps.MenuItem(reset_label)
                             sub.set_callback(noop)
                             item.add(sub)
                             callbacks.append(sub)

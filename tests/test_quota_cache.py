@@ -44,7 +44,18 @@ def test_claude_quota_normalizes_utilization_fraction():
         "seven_day": {"utilization": 57, "resets_at": 1780500000},
     }
     q = quota.claude_quota_from_oauth(body, plan="pro")
-    assert q["used_percent"] == 57
+    # Primary is the 5-hour window (what blocks mid-session).
+    assert q["used_percent"] == 42.0
+    assert q["label"] == "5-hour limit"
     assert q["plan"] == "pro"
     keys = {w["key"]: w["used_percent"] for w in q["windows"]}
     assert keys == {"five_hour": 42.0, "seven_day": 57}
+
+
+def test_claude_quota_falls_back_to_seven_day_without_five_hour():
+    body = {
+        "seven_day": {"utilization": 57, "resets_at": 1780500000},
+    }
+    q = quota.claude_quota_from_oauth(body, plan="pro")
+    assert q["used_percent"] == 57
+    assert q["label"] == "7-day limit"

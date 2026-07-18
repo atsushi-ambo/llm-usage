@@ -175,8 +175,11 @@ def claude_quota_from_oauth(data: dict[str, Any], *, plan: str | None = None) ->
     _win("seven_day_sonnet", "7-day Sonnet")
     _win("seven_day_opus", "7-day Opus")
 
-    # Primary bar: prefer 7-day overall, else first window
-    primary = next((w for w in windows if w["key"] == "seven_day"), None)
+    # Primary bar: prefer 5-hour — it resets soonest and is what blocks you
+    # mid-session. 7-day and other windows stay available in `windows`.
+    primary = next((w for w in windows if w["key"] == "five_hour"), None)
+    if primary is None:
+        primary = next((w for w in windows if w["key"] == "seven_day"), None)
     if primary is None and windows:
         primary = windows[0]
 

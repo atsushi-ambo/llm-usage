@@ -413,7 +413,10 @@
           push('seven_day', '7-day');
           push('seven_day_sonnet', '7-day Sonnet');
           push('seven_day_opus', '7-day Opus');
-          const primary = windows.find(w => w.key === 'seven_day') || windows[0];
+          // Prefer 5-hour (what blocks mid-session); fall back to 7-day.
+          const primary = windows.find(w => w.key === 'five_hour')
+            || windows.find(w => w.key === 'seven_day')
+            || windows[0];
           if (primary) {
             return {
               used_percent: primary.used_percent,
