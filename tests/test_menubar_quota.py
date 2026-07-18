@@ -1,7 +1,6 @@
 from llm_usage.menubar import (
     _bar_segments,
     _display_quota,
-    _mood_emoji,
     _pct_rgb,
     _quota_of,
     _unicode_bar,
@@ -78,18 +77,11 @@ def test_no_quota_returns_none():
     assert _display_quota(p) is None
 
 
-def test_mood_emoji_escalates_with_usage():
-    assert _mood_emoji(10) == "🌿"
-    assert _mood_emoji(45) == "✨"
-    assert _mood_emoji(75) == "⚡"
-    assert _mood_emoji(95) == "🔥"
-
-
 def test_bar_segments_fill_count_matches_percent():
     segs = _bar_segments(50.0, width=10, brand=(100, 100, 200))
     assert len(segs) == 10
-    filled = sum(1 for ch, _ in segs if ch == "●")
-    empty = sum(1 for ch, _ in segs if ch == "○")
+    filled = sum(1 for ch, _ in segs if ch == "█")
+    empty = sum(1 for ch, _ in segs if ch == "░")
     assert filled == 5
     assert empty == 5
 

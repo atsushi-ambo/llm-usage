@@ -27,50 +27,15 @@ NOTIFY_THRESHOLDS = (70, 90)
 # Default: Grok in the menu bar (user can switch)
 DEFAULT_FOCUS = "grok"
 
-# Per-provider brand colors + emoji for a fun, scannable menu.
+# Per-provider brand colors for the colored usage bars.
 PROVIDER_STYLE: dict[str, dict] = {
-    "claude": {
-        "letter": "C",
-        "short": "Claude",
-        "emoji": "🧡",
-        "rgb": (232, 145, 90),
-    },
-    "codex": {
-        "letter": "X",
-        "short": "Codex",
-        "emoji": "💚",
-        "rgb": (34, 197, 94),
-    },
-    "openai": {
-        "letter": "O",
-        "short": "OpenAI",
-        "emoji": "🟢",
-        "rgb": (16, 163, 127),
-    },
-    "grok": {
-        "letter": "G",
-        "short": "Grok",
-        "emoji": "💜",
-        "rgb": (167, 139, 250),
-    },
-    "cursor": {
-        "letter": "Cu",
-        "short": "Cursor",
-        "emoji": "💙",
-        "rgb": (96, 165, 250),
-    },
-    "gemini": {
-        "letter": "Ge",
-        "short": "Gemini",
-        "emoji": "💛",
-        "rgb": (251, 191, 36),
-    },
-    "openrouter": {
-        "letter": "Or",
-        "short": "OpenRouter",
-        "emoji": "🩵",
-        "rgb": (45, 212, 191),
-    },
+    "claude": {"letter": "C", "short": "Claude", "rgb": (232, 145, 90)},
+    "codex": {"letter": "X", "short": "Codex", "rgb": (34, 197, 94)},
+    "openai": {"letter": "O", "short": "OpenAI", "rgb": (16, 163, 127)},
+    "grok": {"letter": "G", "short": "Grok", "rgb": (167, 139, 250)},
+    "cursor": {"letter": "Cu", "short": "Cursor", "rgb": (96, 165, 250)},
+    "gemini": {"letter": "Ge", "short": "Gemini", "rgb": (251, 191, 36)},
+    "openrouter": {"letter": "Or", "short": "OpenRouter", "rgb": (45, 212, 191)},
 }
 
 FOCUS_ORDER = ["grok", "codex", "claude", "cursor", "gemini", "openrouter", "openai"]
@@ -179,17 +144,6 @@ def _unicode_bar(pct: float, width: int = 10) -> str:
     return "█" * filled + "░" * (width - filled)
 
 
-def _mood_emoji(pct: float) -> str:
-    """Tiny vibe for the glanceable %."""
-    if pct >= 90:
-        return "🔥"
-    if pct >= 70:
-        return "⚡"
-    if pct >= 40:
-        return "✨"
-    return "🌿"
-
-
 def _pct_rgb(pct: float, brand: tuple[int, int, int]) -> tuple[int, int, int]:
     """Blend brand → warn → hot as usage climbs."""
     if pct >= 90:
@@ -235,9 +189,9 @@ def _bar_segments(
                 color = _lerp_rgb(_RGB_OK, brand, t * 0.7)
             else:
                 color = _lerp_rgb(_RGB_OK, brand, t)
-            segs.append(("●", color))
+            segs.append(("█", color))
         else:
-            segs.append(("○", _RGB_EMPTY))
+            segs.append(("░", _RGB_EMPTY))
     return segs
 
 
@@ -487,16 +441,15 @@ def run_menubar() -> None:
 
         style = PROVIDER_STYLE.get(
             focus if p else DEFAULT_FOCUS,
-            {"letter": "?", "short": "AI", "emoji": "🤖", "rgb": (140, 150, 160)},
+            {"letter": "?", "short": "AI", "rgb": (140, 150, 160)},
         )
         rgb = style["rgb"]
-        emoji = style.get("emoji") or "🤖"
 
         if pct is None:
             key = f"{focus}:none"
             if state.get("status_key") != key:
                 state["status_key"] = key
-                app_obj.title = f" {emoji}"
+                app_obj.title = f" {style['letter']}"
                 try:
                     app_obj.icon = None
                 except Exception:
@@ -506,8 +459,7 @@ def run_menubar() -> None:
         rounded = int(round(pct))
         key = f"{focus}:{rounded}:{style['letter']}"
         # Title string is cheap; only re-render the PNG icon when the bar moved.
-        mood = _mood_emoji(pct)
-        app_obj.title = f" {mood}{style['letter']}{rounded}%"
+        app_obj.title = f" {style['letter']}{rounded}%"
         if state.get("status_key") == key:
             return
         state["status_key"] = key
@@ -544,58 +496,52 @@ def run_menubar() -> None:
 
         if error:
             add_enabled(
-                f"⚠️  {error[:70]}",
-                parts=[("⚠️  ", _RGB_HOT), (error[:70], _RGB_CRIT)],
+                f"! {error[:70]}",
+                parts=[("! ", _RGB_HOT), (error[:70], _RGB_CRIT)],
             )
 
         if report is None:
             add_enabled(
-                "⏳  Loading your AI usage…",
-                parts=[("⏳  Loading your AI usage…", _RGB_MUTED)],
+                "Loading…",
+                parts=[("Loading…", _RGB_MUTED)],
             )
         else:
             stamp = (
-                f"🕐  {datetime.now().strftime('%H:%M:%S')}  ·  "
+                f"Updated {datetime.now().strftime('%H:%M:%S')}  ·  "
                 f"{report.period_start} → {report.period_end}"
             )
             add_enabled(stamp, parts=[(stamp, _RGB_MUTED)])
             app.menu.add(None)
 
-            # ── Per-provider usage (colorful bars + emoji) ──
+            # ── Per-provider usage (colored bars, no emoji) ──
             for p in report.providers:
                 pct = _quota_of(p)
                 style = PROVIDER_STYLE.get(
                     p.provider.value,
-                    {
-                        "letter": "?",
-                        "emoji": "🤖",
-                        "rgb": (120, 140, 160),
-                    },
+                    {"letter": "?", "rgb": (120, 140, 160)},
                 )
                 brand = style["rgb"]
-                emoji = style.get("emoji") or "🤖"
+                letter = style.get("letter") or "?"
                 if pct is not None:
                     q = _display_quota(p) or {}
                     plan = q.get("plan") or ""
                     label = (q.get("label") or "").replace(" limit", "").strip()
-                    mood = _mood_emoji(pct)
                     pct_rgb = _pct_rgb(pct, brand)
                     bar_segs = _bar_segments(pct, 10, brand)
                     plain_bar = "".join(c for c, _ in bar_segs)
 
-                    # plain fallback string
-                    line = f"{emoji} {p.display_name}  {plain_bar}  {pct:.0f}%"
+                    line = f"{letter}  {p.display_name}  {plain_bar}  {pct:.0f}%"
                     if label:
                         line += f"  ·  {label}"
                     if plan:
                         line += f"  ·  {plan}"
 
                     parts: list[tuple[str, tuple[int, int, int] | None]] = [
-                        (f"{emoji} ", None),
+                        (f"{letter}  ", brand),
                         (f"{p.display_name}  ", brand),
                     ]
                     parts.extend(bar_segs)
-                    parts.append((f"  {mood}{pct:.0f}%", pct_rgb))
+                    parts.append((f"  {pct:.0f}%", pct_rgb))
                     if label:
                         parts.append((f"  ·  {label}", _RGB_MUTED))
                     if plan:
@@ -627,9 +573,9 @@ def run_menubar() -> None:
                         try:
                             d = datetime.fromisoformat(str(reset).replace("Z", "+00:00"))
                             reset_txt = (
-                                f"    🔄  {label} resets {d.strftime('%b %d, %H:%M')}"
+                                f"    {label} resets {d.strftime('%b %d, %H:%M')}"
                                 if label
-                                else f"    🔄  Resets {d.strftime('%b %d, %H:%M')}"
+                                else f"    Resets {d.strftime('%b %d, %H:%M')}"
                             )
                             sub = rumps.MenuItem(reset_txt)
                             sub.set_callback(noop)
@@ -643,13 +589,13 @@ def run_menubar() -> None:
                 elif p.requests or p.total_tokens:
                     cost = f"  ·  ${p.cost_usd:.2f}" if p.cost_usd is not None else ""
                     line = (
-                        f"{emoji} {p.display_name}  ·  "
+                        f"{letter}  {p.display_name}  ·  "
                         f"{p.requests:,} req  ·  {p.total_tokens:,} tok{cost}"
                     )
                     add_enabled(
                         line,
                         parts=[
-                            (f"{emoji} ", None),
+                            (f"{letter}  ", brand),
                             (f"{p.display_name}  ·  ", brand),
                             (
                                 f"{p.requests:,} req  ·  {p.total_tokens:,} tok{cost}",
@@ -658,11 +604,11 @@ def run_menubar() -> None:
                         ],
                     )
                 else:
-                    line = f"{emoji} {p.display_name}  ·  not configured"
+                    line = f"{letter}  {p.display_name}  ·  not configured"
                     add_enabled(
                         line,
                         parts=[
-                            (f"{emoji} ", None),
+                            (f"{letter}  ", _RGB_MUTED),
                             (f"{p.display_name}  ·  ", _RGB_MUTED),
                             ("not configured", _RGB_EMPTY),
                         ],
@@ -671,12 +617,12 @@ def run_menubar() -> None:
             app.menu.add(None)
 
             # ── Switch which bar shows in the menu bar ──
-            focus_menu = rumps.MenuItem("✨  Show in menu bar")
+            focus_menu = rumps.MenuItem("Show in menu bar")
             focus_menu.set_callback(noop)
             _set_colored_title(
                 focus_menu,
-                [("✨  Show in menu bar", (196, 181, 253))],
-                "✨  Show in menu bar",
+                [("Show in menu bar", (196, 181, 253))],
+                "Show in menu bar",
             )
             callbacks.append(focus_menu)
 
@@ -685,29 +631,29 @@ def run_menubar() -> None:
                 if prov is None:
                     continue
                 style = PROVIDER_STYLE.get(
-                    pid, {"short": pid, "letter": "?", "emoji": "🤖", "rgb": _RGB_MUTED}
+                    pid, {"short": pid, "letter": "?", "rgb": _RGB_MUTED}
                 )
                 brand = style["rgb"]
-                emoji = style.get("emoji") or "🤖"
+                letter = style.get("letter") or "?"
                 pct = _quota_of(prov)
                 if pct is not None:
-                    label = f"{emoji}  {style['short']}  ·  {_mood_emoji(pct)}{pct:.0f}%"
+                    label = f"{letter}  {style['short']}  ·  {pct:.0f}%"
                     parts = [
-                        (f"{emoji}  ", None),
+                        (f"{letter}  ", brand),
                         (f"{style['short']}  ·  ", brand),
-                        (f"{_mood_emoji(pct)}{pct:.0f}%", _pct_rgb(pct, brand)),
+                        (f"{pct:.0f}%", _pct_rgb(pct, brand)),
                     ]
                 elif prov.source.value == "unavailable" and not (
                     prov.requests or prov.total_tokens
                 ):
-                    label = f"{emoji}  {style['short']}  ·  n/a"
+                    label = f"{letter}  {style['short']}  ·  n/a"
                     parts = [
-                        (f"{emoji}  ", None),
+                        (f"{letter}  ", _RGB_MUTED),
                         (f"{style['short']}  ·  n/a", _RGB_EMPTY),
                     ]
                 else:
-                    label = f"{emoji}  {style['short']}"
-                    parts = [(f"{emoji}  ", None), (style["short"], brand)]
+                    label = f"{letter}  {style['short']}"
+                    parts = [(f"{letter}  ", brand), (style["short"], brand)]
 
                 def _make_cb(provider_id: str):
                     def _cb(_=None, _pid=provider_id) -> None:
@@ -733,34 +679,34 @@ def run_menubar() -> None:
             costs = [p.cost_usd for p in report.providers if p.cost_usd is not None]
             if costs:
                 app.menu.add(None)
-                cost_line = f"💰  Known cost: ${sum(costs):.2f}"
+                cost_line = f"Known cost: ${sum(costs):.2f}"
                 add_enabled(
                     cost_line,
                     parts=[
-                        ("💰  Known cost: ", _RGB_MUTED),
+                        ("Known cost: ", _RGB_MUTED),
                         (f"${sum(costs):.2f}", _RGB_WARN),
                     ],
                 )
 
         app.menu.add(None)
 
-        open_dash = rumps.MenuItem("📊  Open Dashboard")
-        refresh_item = rumps.MenuItem("🔄  Refresh Now")
-        quit_item = rumps.MenuItem("👋  Quit llm-usage")
+        open_dash = rumps.MenuItem("Open Dashboard")
+        refresh_item = rumps.MenuItem("Refresh Now")
+        quit_item = rumps.MenuItem("Quit llm-usage")
         _set_colored_title(
             open_dash,
-            [("📊  Open Dashboard", (125, 211, 252))],
-            "📊  Open Dashboard",
+            [("Open Dashboard", (125, 211, 252))],
+            "Open Dashboard",
         )
         _set_colored_title(
             refresh_item,
-            [("🔄  Refresh Now", (167, 243, 208))],
-            "🔄  Refresh Now",
+            [("Refresh Now", (167, 243, 208))],
+            "Refresh Now",
         )
         _set_colored_title(
             quit_item,
-            [("👋  Quit llm-usage", _RGB_MUTED)],
-            "👋  Quit llm-usage",
+            [("Quit llm-usage", _RGB_MUTED)],
+            "Quit llm-usage",
         )
 
         def _authenticated_dashboard_url() -> str | None:
@@ -853,13 +799,12 @@ def run_menubar() -> None:
     def _check_quota_notifications(report: AggregateReport) -> None:
         for name, label, pct, threshold in _quota_crossings(report, notified):
             try:
-                mood = _mood_emoji(pct)
                 rumps.notification(
-                    title=f"{mood} {name} — {label}",
+                    title=f"{name} — {label}",
                     subtitle=f"{pct:.0f}% used",
-                    message="🔥 Almost at your usage limit — time to cool off!"
+                    message="Almost at your usage limit."
                     if threshold >= 90
-                    else "⚡ Approaching your usage limit — pace yourself.",
+                    else "Approaching your usage limit.",
                 )
             except Exception:  # noqa: BLE001
                 pass  # notifications are best-effort, never fatal
@@ -899,7 +844,7 @@ def run_menubar() -> None:
 
         if error is not None:
             state["error"] = error
-            app.title = " ⚠️"
+            app.title = " !"
             rebuild_menu(state.get("report"), error=error)
         else:
             state["report"] = report
