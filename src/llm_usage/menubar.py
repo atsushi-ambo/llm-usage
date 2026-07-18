@@ -27,22 +27,22 @@ NOTIFY_THRESHOLDS = (70, 90)
 # Default: Grok in the menu bar (user can switch)
 DEFAULT_FOCUS = "grok"
 
-# VS Code Dark+ inspired palette (muted syntax colors, not neon pastels).
+# VS Code Dark+ syntax colors — tuned for a dark menu (forced below).
 # https://code.visualstudio.com/api/references/theme-color
 PROVIDER_STYLE: dict[str, dict] = {
-    # #CE9178 strings / warm orange
+    # #CE9178 strings
     "claude": {"letter": "C", "short": "Claude", "rgb": (206, 145, 120)},
-    # #4EC9B0 type/teal
+    # #4EC9B0 types
     "codex": {"letter": "X", "short": "Codex", "rgb": (78, 201, 176)},
-    # #6A9955 comments/green
+    # #6A9955 comments
     "openai": {"letter": "O", "short": "OpenAI", "rgb": (106, 153, 85)},
-    # #C586C0 keywords/purple
+    # #C586C0 keywords
     "grok": {"letter": "G", "short": "Grok", "rgb": (197, 134, 192)},
-    # #569CD6 keywords/blue
+    # #569CD6 language keywords / links
     "cursor": {"letter": "Cu", "short": "Cursor", "rgb": (86, 156, 214)},
-    # #DCDCAA functions/yellow
+    # #DCDCAA functions
     "gemini": {"letter": "Ge", "short": "Gemini", "rgb": (220, 220, 170)},
-    # #9CDCFE variables/light blue
+    # #9CDCFE variables
     "openrouter": {"letter": "Or", "short": "OpenRouter", "rgb": (156, 220, 254)},
 }
 
@@ -53,10 +53,11 @@ _RGB_OK = (78, 201, 176)  # #4EC9B0
 _RGB_WARN = (220, 220, 170)  # #DCDCAA
 _RGB_HOT = (206, 145, 120)  # #CE9178
 _RGB_CRIT = (244, 71, 71)  # #F44747
-_RGB_EMPTY = (62, 62, 66)  # #3E3E42 editor line highlight / gutter
-_RGB_MUTED = (133, 133, 133)  # #858585 description foreground
-_RGB_TITLE = (212, 212, 212)  # #D4D4D4 editor foreground
-_RGB_ACCENT = (0, 122, 204)  # #007ACC activity bar badge / focus
+# Empty track on dark menus needs mid-grey so ░ segments are visible
+_RGB_EMPTY = (90, 90, 94)  # between #3C3C3C and #6B6B6B
+_RGB_MUTED = (156, 156, 156)  # slightly brighter than #858585 for dark bg
+_RGB_TITLE = (212, 212, 212)  # #D4D4D4 editor.foreground
+_RGB_ACCENT = (0, 122, 204)  # #007ACC
 _RGB_LINK = (86, 156, 214)  # #569CD6
 _RGB_STRING = (206, 145, 120)  # #CE9178
 
@@ -258,6 +259,23 @@ def _set_colored_title(
         pass
 
 
+def _force_dark_appearance() -> None:
+    """Force this app's menus into dark mode (VS Code–like chrome).
+
+    System light mode otherwise paints a white menu under our Dark+ colors,
+    which makes them look washed out / unchanged.
+    """
+    try:
+        from AppKit import NSAppearance, NSApplication  # type: ignore
+
+        app = NSApplication.sharedApplication()
+        dark = NSAppearance.appearanceNamed_("NSAppearanceNameDarkAqua")
+        if dark is not None and app is not None:
+            app.setAppearance_(dark)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _render_single_bar_icon(pct: float, rgb: tuple[int, int, int]) -> Path | None:
     """Rounded usage pill for the menu bar — brand fill that heats up at high %."""
     try:
@@ -306,12 +324,16 @@ def _render_single_bar_icon(pct: float, rgb: tuple[int, int, int]) -> Path | Non
         y = pad
         radius = bar_h / 2
 
-        # track — VS Code editor gutter grey
-        NSColor.colorWithCalibratedRed_green_blue_alpha_(0.24, 0.24, 0.26, 1.0).set()
+        # Dark editor background track (#252526)
+        NSColor.colorWithCalibratedRed_green_blue_alpha_(0.145, 0.145, 0.149, 1.0).set()
         track = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
             NSMakeRect(pad, y, track_w, bar_h), radius, radius
         )
         track.fill()
+        # Thin border like VS Code widget border (#3C3C3C)
+        NSColor.colorWithCalibratedRed_green_blue_alpha_(0.235, 0.235, 0.235, 1.0).set()
+        track.setLineWidth_(0.75)
+        track.stroke()
 
         fill_rgb = _bar_color_for_pct(pct, rgb)
         r, g, b = fill_rgb[0] / 255.0, fill_rgb[1] / 255.0, fill_rgb[2] / 255.0
@@ -322,8 +344,8 @@ def _render_single_bar_icon(pct: float, rgb: tuple[int, int, int]) -> Path | Non
                 NSMakeRect(pad, y, min(fill_w, track_w), bar_h), radius, radius
             )
             fill.fill()
-            # Subtle top edge (editor-widget, not candy gloss)
-            NSColor.colorWithCalibratedRed_green_blue_alpha_(1.0, 1.0, 1.0, 0.12).set()
+            # Soft highlight (editor-widget)
+            NSColor.colorWithCalibratedRed_green_blue_alpha_(1.0, 1.0, 1.0, 0.10).set()
             hi = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
                 NSMakeRect(pad + 1, y + bar_h * 0.18, min(fill_w, track_w) - 2, bar_h * 0.28),
                 2,
@@ -403,6 +425,8 @@ def run_menubar() -> None:
     }
 
     app = rumps.App("llm-usage", title="…", quit_button=None)
+    # Dark menu chrome so VS Code Dark+ colors read correctly (not washed on white).
+    _force_dark_appearance()
 
     # Keep strong refs so callbacks aren't GC'd
     callbacks: list = []
