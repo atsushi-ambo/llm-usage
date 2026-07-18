@@ -207,17 +207,22 @@ rate limits happy:
 
 ### Dashboard security
 
-- Each `llm-usage dashboard` run generates a fresh, random token (never
-  written to disk in plaintext except a 0600 session file used only so
-  `llm-usage menubar`'s "Open Dashboard" can reuse it). The printed URL
-  includes `?token=...` — open that link; the browser then holds an
-  HttpOnly cookie for the rest of the session.
+- Binds to **loopback only** by default (`127.0.0.1`). A non-local bind
+  requires an explicit `--i-understand-no-auth` flag (token-only protection
+  is not enough on untrusted networks).
+- Each `llm-usage dashboard` run generates a fresh random token. The printed
+  URL includes `?token=...`; the browser then holds an HttpOnly cookie.
+  The same token is also stored mode `0600` under
+  `~/.config/llm-usage/cache/` so the menubar can open an authenticated tab.
 - The `Host` header is checked against loopback names on every request,
   which blocks DNS-rebinding attempts to read your usage data from a
   malicious webpage.
 - `/api/usage` responses and `export` output strip raw upstream payloads
   (full OAuth usage bodies, billing snapshots, API key listings) by default;
   pass `--include-raw` to `export` if you need them for debugging.
+- Secrets live only in `~/.config/llm-usage/.env` (or env vars) and in other
+  tools' credential stores (`~/.claude`, `~/.codex`, `~/.grok`, Keychain).
+  Nothing secret is committed to this repository.
 
 ---
 

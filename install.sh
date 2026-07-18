@@ -8,7 +8,7 @@ BIN_DIR="${HOME}/.local/bin"
 echo "Installing llm-usage from ${ROOT} …"
 
 if command -v uv >/dev/null 2>&1; then
-  # Preferred: isolated tool env (same pattern as headroom on this machine)
+  # Preferred: isolated tool env via uv
   uv tool install --force -e "${ROOT}"
   echo "Installed via: uv tool install -e"
 elif [[ -x "${HOME}/.local/bin/python3.13" ]]; then

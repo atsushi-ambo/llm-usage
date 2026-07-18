@@ -15,6 +15,8 @@ RAW_META_KEYS = {
     "raw_dashboard",
     "api_keys",
     "available_models",
+    # Past-period billing snapshot kept for diagnostics; still vendor-raw.
+    "stale_billing",
 }
 
 

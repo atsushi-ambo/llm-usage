@@ -88,6 +88,13 @@ def dashboard_cmd(
     port: Optional[int] = typer.Option(None, "--port", help="HTTP port"),
     host: Optional[str] = typer.Option(None, "--host", help="Bind host"),
     days: Optional[int] = typer.Option(None, "--days", "-d"),
+    i_understand_no_auth: bool = typer.Option(
+        False,
+        "--i-understand-no-auth",
+        help="Required to bind on a non-loopback host. The dashboard only has a "
+        "per-session token — anyone who can reach the port and the token can "
+        "read your usage data.",
+    ),
 ) -> None:
     """Start a local web dashboard (http://127.0.0.1:8765)."""
     settings = load_settings()
@@ -95,7 +102,15 @@ def dashboard_cmd(
         settings = settings.model_copy(update={"days": days})
     bind_host = host or settings.host
     bind_port = port or settings.port
-    if bind_host not in ("127.0.0.1", "localhost", "::1"):
+    loopback = {"127.0.0.1", "localhost", "::1"}
+    if bind_host not in loopback:
+        if not i_understand_no_auth:
+            console.print(
+                f"[red]Refusing to bind to {bind_host}.[/red] Default is loopback only. "
+                "If you really need a non-local bind, pass --i-understand-no-auth "
+                "(token-only protection — not safe on untrusted networks)."
+            )
+            raise typer.Exit(code=2)
         console.print(
             f"[yellow]⚠ Binding to {bind_host}: keep this on a trusted network — "
             "the dashboard is only protected by a per-session token, not real "
@@ -111,7 +126,8 @@ def dashboard_cmd(
         Panel.fit(
             f"[bold]llm-usage dashboard[/bold]\n"
             f"Open [link={url}]{url}[/link]\n"
-            "(the token is required — it's regenerated each run and never written to disk)\n"
+            "(token required; also stored 0600 under ~/.config/llm-usage/cache "
+            "so the menubar can open an authenticated tab)\n"
             "Press Ctrl+C to stop.",
             border_style="cyan",
         )

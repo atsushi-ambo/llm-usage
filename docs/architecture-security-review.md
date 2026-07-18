@@ -1,5 +1,11 @@
 # llm-usage — Architecture & Security Review
 
+> **Historical note (kept for design context).** Written 2026-07-16 against
+> commit `90ca566`. Phases 1–3 (dashboard auth/CSP/XSS, raw-meta redaction,
+> CWD `.env` isolation, log-scan + snapshot caches, menubar thread-safety,
+> doctor/check, OpenRouter) are largely implemented on `main` now. Treat open
+> items below as optional backlog, not a live vulnerability report.
+
 Date: 2026-07-16 · Scope: full repo at commit `90ca566`
 Purpose: actionable findings + improvement plan, written so each item can be handed to an implementation agent as a standalone task.
 
