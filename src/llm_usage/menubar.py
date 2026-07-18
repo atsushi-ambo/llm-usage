@@ -14,10 +14,11 @@ from pathlib import Path
 from llm_usage.config import load_settings
 from llm_usage.models import AggregateReport, ProviderId, ProviderReport
 from llm_usage.providers import collect_all_cached
-from llm_usage.quota import atomic_write_json
+from llm_usage.quota import atomic_write_json, quota_windows
 
 REFRESH_SECONDS = 120
 PREFS_PATH = Path.home() / ".config" / "llm-usage" / "menubar.json"
+NOTIFY_THRESHOLDS = (70, 90)
 
 # Default: Grok in the menu bar (user can switch)
 DEFAULT_FOCUS = "grok"
@@ -29,9 +30,10 @@ PROVIDER_STYLE: dict[str, dict] = {
     "grok": {"letter": "G", "short": "Grok", "rgb": (167, 139, 250)},
     "cursor": {"letter": "Cu", "short": "Cursor", "rgb": (96, 165, 250)},
     "gemini": {"letter": "Ge", "short": "Gemini", "rgb": (251, 191, 36)},
+    "openrouter": {"letter": "Or", "short": "OpenRouter", "rgb": (45, 212, 191)},
 }
 
-FOCUS_ORDER = ["grok", "codex", "claude", "cursor", "gemini", "openai"]
+FOCUS_ORDER = ["grok", "codex", "claude", "cursor", "gemini", "openrouter", "openai"]
 
 
 def _load_prefs() -> dict:
@@ -51,6 +53,26 @@ def _save_prefs(prefs: dict) -> None:
         atomic_write_json(PREFS_PATH, prefs)
     except OSError:
         pass
+
+
+def _quota_crossings(
+    report: AggregateReport, notified: dict[tuple[str, str], int]
+) -> list[tuple[str, str, float, int]]:
+    """(display_name, window_label, pct, threshold) for every quota window
+    that just crossed a new NOTIFY_THRESHOLDS level, updating `notified` in
+    place so the same crossing isn't returned again until the window drops
+    back below the lowest threshold (e.g. it reset)."""
+    crossings: list[tuple[str, str, float, int]] = []
+    for p in report.providers:
+        for label, pct in quota_windows(p):
+            key = (p.provider.value, label)
+            crossed = max((t for t in NOTIFY_THRESHOLDS if pct >= t), default=None)
+            if crossed is not None and crossed != notified.get(key):
+                crossings.append((p.display_name, label, pct, crossed))
+                notified[key] = crossed
+            elif crossed is None and key in notified:
+                del notified[key]
+    return crossings
 
 
 def _display_quota(p: ProviderReport) -> dict | None:
@@ -485,6 +507,24 @@ def run_menubar() -> None:
     # the result up and is the only place that mutates AppKit state.
     pending_lock = threading.Lock()
     pending: dict = {"report": None, "error": None, "ready": False}
+    # (provider, window label) -> highest threshold already notified for,
+    # so a poll landing again at the same level doesn't refire. Cleared
+    # once the window drops back below the lowest threshold (e.g. it
+    # reset), so a future crossing notifies again.
+    notified: dict[tuple[str, str], int] = {}
+
+    def _check_quota_notifications(report: AggregateReport) -> None:
+        for name, label, pct, threshold in _quota_crossings(report, notified):
+            try:
+                rumps.notification(
+                    title=f"{name} — {label}",
+                    subtitle=f"{pct:.0f}% used",
+                    message="Almost at your usage limit!"
+                    if threshold >= 90
+                    else "Approaching your usage limit.",
+                )
+            except Exception:  # noqa: BLE001
+                pass  # notifications are best-effort, never fatal
 
     def do_collect(*, force_refresh: bool = False) -> None:
         if state["updating"]:
@@ -525,6 +565,7 @@ def run_menubar() -> None:
             state["error"] = None
             _apply_status(app, report, state["focus"])
             rebuild_menu(report)
+            _check_quota_notifications(report)
 
     def background_loop() -> None:
         while True:
