@@ -13,10 +13,15 @@ from pathlib import Path
 
 from llm_usage.config import load_settings
 from llm_usage.models import AggregateReport, ProviderId, ProviderReport
-from llm_usage.providers import collect_all_cached
 from llm_usage.quota import atomic_write_json, quota_windows
 
-REFRESH_SECONDS = 120
+# Poll gently: quota barely moves minute-to-minute, and a full collect is
+# the expensive part. 3 minutes keeps the bar fresh without thrashing RAM.
+REFRESH_SECONDS = 180
+# Menubar only needs quotas + light totals — no 30-day model breakdown.
+MENUBAR_DAYS = 7
+# Prefer reusing the shared disk snapshot over a fresh collect when possible.
+MENUBAR_SNAPSHOT_TTL_S = 120.0
 PREFS_PATH = Path.home() / ".config" / "llm-usage" / "menubar.json"
 NOTIFY_THRESHOLDS = (70, 90)
 
@@ -396,6 +401,32 @@ def _render_single_bar_icon(pct: float, rgb: tuple[int, int, int]) -> Path | Non
         return None
 
 
+def _collect_menubar_report(
+    *,
+    days: int,
+    ttl_s: float,
+    force_refresh: bool,
+) -> AggregateReport:
+    """Collect usage and immediately drop heavy fields the menu never shows.
+
+    Full collection still runs (shared snapshot cache helps), but the long-lived
+    menubar process only retains a compact quota snapshot — not per-model
+    history, daily series, or raw OAuth bodies.
+    """
+    from llm_usage.config import load_settings
+    from llm_usage.providers import collect_all_cached
+    from llm_usage.serialize import slim_report_for_menubar
+
+    settings = load_settings()
+    report = collect_all_cached(
+        settings,
+        days=days,
+        ttl_s=ttl_s,
+        force_refresh=force_refresh,
+    )
+    return slim_report_for_menubar(report)
+
+
 def run_menubar() -> None:
     """Start the menu bar app (blocks). Requires rumps on macOS."""
     try:
@@ -414,6 +445,8 @@ def run_menubar() -> None:
         "error": None,
         "updating": False,
         "focus": prefs.get("focus") or DEFAULT_FOCUS,
+        # Skip re-rendering the status-bar icon when the painted key is unchanged.
+        "status_key": None,
     }
 
     app = rumps.App("llm-usage", title="…", quit_button=None)
@@ -459,12 +492,24 @@ def run_menubar() -> None:
         emoji = style.get("emoji") or "🤖"
 
         if pct is None:
-            app_obj.title = f" {emoji}"
-            try:
-                app_obj.icon = None
-            except Exception:
-                pass
+            key = f"{focus}:none"
+            if state.get("status_key") != key:
+                state["status_key"] = key
+                app_obj.title = f" {emoji}"
+                try:
+                    app_obj.icon = None
+                except Exception:
+                    pass
             return
+
+        rounded = int(round(pct))
+        key = f"{focus}:{rounded}:{style['letter']}"
+        # Title string is cheap; only re-render the PNG icon when the bar moved.
+        mood = _mood_emoji(pct)
+        app_obj.title = f" {mood}{style['letter']}{rounded}%"
+        if state.get("status_key") == key:
+            return
+        state["status_key"] = key
 
         path = _render_single_bar_icon(pct, rgb)
         if path and path.exists():
@@ -473,9 +518,6 @@ def run_menubar() -> None:
                 app_obj.icon = str(path)
             except Exception:
                 pass
-        # Glanceable: mood + letter + %  (colored bar is the icon)
-        mood = _mood_emoji(pct)
-        app_obj.title = f" {mood}{style['letter']}{int(round(pct))}%"
 
     def rebuild_menu(report: AggregateReport | None, error: str | None = None) -> None:
         app.menu.clear()
@@ -826,12 +868,13 @@ def run_menubar() -> None:
             return
         state["updating"] = True
         try:
-            # The disk-backed snapshot (see collect_all_cached) is shared
-            # with the CLI and dashboard: a poll landing right after either
-            # of those reuses their result instead of re-hitting every
-            # provider API. "Refresh Now" forces a fresh collection.
-            report = collect_all_cached(
-                settings, days=settings.days, force_refresh=force_refresh
+            # Collect in a short-lived child process so httpx/pydantic/log
+            # trees are freed when it exits — the menubar UI process only
+            # keeps a slim AggregateReport between polls.
+            report = _collect_menubar_report(
+                days=MENUBAR_DAYS,
+                ttl_s=MENUBAR_SNAPSHOT_TTL_S,
+                force_refresh=force_refresh,
             )
             with pending_lock:
                 pending["report"] = report
@@ -849,11 +892,13 @@ def run_menubar() -> None:
             if not pending["ready"]:
                 return
             report, error = pending["report"], pending["error"]
+            pending["report"] = None  # drop extra ref; state owns the report
+            pending["error"] = None
             pending["ready"] = False
 
         if error is not None:
             state["error"] = error
-            app.title = " AI!"
+            app.title = " ⚠️"
             rebuild_menu(state.get("report"), error=error)
         else:
             state["report"] = report

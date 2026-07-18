@@ -14,6 +14,7 @@ from llm_usage.providers.openai_provider import collect_openai
 from llm_usage.providers.openrouter import collect_openrouter
 from llm_usage.providers.xai import collect_xai
 from llm_usage.quota import read_json_cache, write_json_cache
+from llm_usage.serialize import report_to_dict
 
 # Most provider collectors have no caching of their own (Claude's OAuth quota
 # is the one exception — see quota.py) and every collect_all() call hits
@@ -23,7 +24,7 @@ from llm_usage.quota import read_json_cache, write_json_cache
 # independent round of live API calls. This is the default TTL for
 # collect_all_cached()'s disk-backed snapshot, which lets near-simultaneous
 # callers share one collection instead.
-DEFAULT_SNAPSHOT_TTL_S = 60.0
+DEFAULT_SNAPSHOT_TTL_S = 90.0
 
 
 def collect_all(settings: Settings, days: int | None = None) -> AggregateReport:
@@ -78,7 +79,9 @@ def collect_all_cached(
 
     report = collect_all(settings, days=days)
     if ttl_s > 0:
-        write_json_cache(cache_name, report.model_dump(mode="json"))
+        # Strip raw upstream payloads before disk — smaller cache, less RAM
+        # when reloading, and avoids parking OAuth bodies on disk.
+        write_json_cache(cache_name, report_to_dict(report, include_raw_meta=False))
     return report
 
 
