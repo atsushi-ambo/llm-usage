@@ -27,37 +27,28 @@ NOTIFY_THRESHOLDS = (70, 90)
 # Default: Grok in the menu bar (user can switch)
 DEFAULT_FOCUS = "grok"
 
-# Gaming / neon HUD palette — bright fills that read on dark chrome.
+# VS Code Dark+-inspired palette — muted so bars stay legible on both
+# light and dark NSMenus (background is always system-drawn).
+# Brand rgb is the *light-menu* baseline; dark mode brightens ~18%.
 PROVIDER_STYLE: dict[str, dict] = {
-    # neon orange
-    "claude": {"letter": "C", "short": "Claude", "rgb": (255, 122, 45)},
-    # neon green
-    "codex": {"letter": "X", "short": "Codex", "rgb": (57, 255, 20)},
-    # matrix green
-    "openai": {"letter": "O", "short": "OpenAI", "rgb": (0, 230, 118)},
-    # electric magenta
-    "grok": {"letter": "G", "short": "Grok", "rgb": (224, 64, 251)},
-    # electric blue
-    "cursor": {"letter": "Cu", "short": "Cursor", "rgb": (0, 180, 255)},
-    # neon gold
-    "gemini": {"letter": "Ge", "short": "Gemini", "rgb": (255, 214, 0)},
-    # cyan laser
-    "openrouter": {"letter": "Or", "short": "OpenRouter", "rgb": (0, 245, 255)},
+    "claude": {"letter": "C", "short": "Claude", "rgb": (206, 145, 120)},  # #ce9178
+    "codex": {"letter": "X", "short": "Codex", "rgb": (106, 153, 85)},  # #6a9955
+    "openai": {"letter": "O", "short": "OpenAI", "rgb": (78, 201, 176)},  # #4ec9b0
+    "grok": {"letter": "G", "short": "Grok", "rgb": (197, 134, 192)},  # #c586c0
+    "cursor": {"letter": "Cu", "short": "Cursor", "rgb": (86, 156, 214)},  # #569cd6
+    "gemini": {"letter": "Ge", "short": "Gemini", "rgb": (204, 167, 0)},  # #cca700
+    "openrouter": {"letter": "Or", "short": "OpenRouter", "rgb": (156, 220, 254)},  # #9cdcfe
 }
 
 FOCUS_ORDER = ["grok", "codex", "claude", "cursor", "gemini", "openrouter", "openai"]
 
-# Usage heat — brand neon until high load, then warn → crit.
-_RGB_OK = (57, 255, 20)  # neon green
-_RGB_WARN = (255, 230, 0)  # warning yellow
-_RGB_HOT = (255, 109, 0)  # hot orange
-_RGB_CRIT = (255, 23, 68)  # alert red
-_RGB_EMPTY = (48, 48, 64)  # dark HUD track
-_RGB_MUTED = (140, 145, 170)  # cool grey
-_RGB_TITLE = (236, 240, 255)  # near-white HUD text
-_RGB_ACCENT = (0, 180, 255)  # electric blue
-_RGB_LINK = (0, 200, 255)  # cyan link
-_RGB_STRING = (255, 122, 45)  # neon orange
+# Charts heat ramp (light-menu baseline)
+_RGB_OK = (137, 209, 133)  # #89d185
+_RGB_WARN = (204, 167, 0)  # #cca700  ≥50%
+_RGB_HOT = (209, 134, 22)  # #d18616  ≥70%
+_RGB_CRIT = (229, 20, 0)  # #e51400   ≥90%
+_RGB_EMPTY_LIGHT = (200, 200, 205)
+_RGB_EMPTY_DARK = (60, 60, 60)
 
 
 def _load_prefs() -> dict:
@@ -154,17 +145,82 @@ def _unicode_bar(pct: float, width: int = 10) -> str:
     return "█" * filled + "░" * (width - filled)
 
 
-def _pct_rgb(pct: float, brand: tuple[int, int, int]) -> tuple[int, int, int]:
-    """Keep brand color until high usage, then VS Code warn/error tones."""
+def _is_dark_appearance() -> bool:
+    """Whether the running app's effective appearance is dark."""
+    try:
+        from AppKit import NSApplication  # type: ignore
+
+        app = NSApplication.sharedApplication()
+        appearance = app.effectiveAppearance()
+        match = appearance.bestMatchFromAppearancesWithNames_(
+            ["NSAppearanceNameDarkAqua", "NSAppearanceNameAqua"]
+        )
+        return str(match) == "NSAppearanceNameDarkAqua"
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _brighten(rgb: tuple[int, int, int], factor: float = 1.18) -> tuple[int, int, int]:
+    """Lift colors ~15–20% for dark menus so they don't sink into the chrome."""
+    return (
+        min(255, int(rgb[0] * factor)),
+        min(255, int(rgb[1] * factor)),
+        min(255, int(rgb[2] * factor)),
+    )
+
+
+def _appearance_palette() -> dict:
+    """Resolve brand + heat colors for the current light/dark menu."""
+    dark = _is_dark_appearance()
+    brands = {k: v["rgb"] for k, v in PROVIDER_STYLE.items()}
+    ok, warn, hot, crit = _RGB_OK, _RGB_WARN, _RGB_HOT, _RGB_CRIT
+    empty = _RGB_EMPTY_DARK if dark else _RGB_EMPTY_LIGHT
+    if dark:
+        brands = {k: _brighten(v) for k, v in brands.items()}
+        ok, warn, hot, crit = (
+            _brighten(ok),
+            _brighten(warn),
+            _brighten(hot),
+            _brighten(crit),
+        )
+    return {
+        "dark": dark,
+        "brands": brands,
+        "ok": ok,
+        "warn": warn,
+        "hot": hot,
+        "crit": crit,
+        "empty": empty,
+    }
+
+
+def _pct_rgb(
+    pct: float,
+    brand: tuple[int, int, int],
+    *,
+    warn: tuple[int, int, int] = _RGB_WARN,
+    hot: tuple[int, int, int] = _RGB_HOT,
+    crit: tuple[int, int, int] = _RGB_CRIT,
+) -> tuple[int, int, int]:
+    """Brand while healthy; charts heat ramp at ≥50 / ≥70 / ≥90."""
     if pct >= 90:
-        return _RGB_CRIT
-    if pct >= 75:
-        return _RGB_HOT
+        return crit
+    if pct >= 70:
+        return hot
+    if pct >= 50:
+        return warn
     return brand
 
 
-def _bar_color_for_pct(pct: float, base_rgb: tuple[int, int, int]) -> tuple[int, int, int]:
-    return _pct_rgb(pct, base_rgb)
+def _bar_color_for_pct(
+    pct: float,
+    base_rgb: tuple[int, int, int],
+    *,
+    warn: tuple[int, int, int] = _RGB_WARN,
+    hot: tuple[int, int, int] = _RGB_HOT,
+    crit: tuple[int, int, int] = _RGB_CRIT,
+) -> tuple[int, int, int]:
+    return _pct_rgb(pct, base_rgb, warn=warn, hot=hot, crit=crit)
 
 
 def _lerp_rgb(
@@ -179,30 +235,34 @@ def _lerp_rgb(
 
 
 def _bar_segments(
-    pct: float, width: int, brand: tuple[int, int, int]
+    pct: float,
+    width: int,
+    brand: tuple[int, int, int],
+    *,
+    empty: tuple[int, int, int] = _RGB_EMPTY_LIGHT,
+    warn: tuple[int, int, int] = _RGB_WARN,
+    hot: tuple[int, int, int] = _RGB_HOT,
+    crit: tuple[int, int, int] = _RGB_CRIT,
 ) -> list[tuple[str, tuple[int, int, int]]]:
-    """Neon bar: solid brand fill, heat toward red when the meter is hot."""
+    """Solid brand/heat fill; empty track matches light or dark menu."""
     filled = int(round((pct / 100.0) * width))
     filled = max(0, min(width, filled))
+    fill = _pct_rgb(pct, brand, warn=warn, hot=hot, crit=crit)
     segs: list[tuple[str, tuple[int, int, int]]] = []
     for i in range(width):
         if i < filled:
-            t = (i + 1) / max(width, 1)
-            if pct >= 90:
-                color = _lerp_rgb(brand, _RGB_CRIT, 0.4 + 0.6 * t)
-            elif pct >= 75:
-                color = _lerp_rgb(brand, _RGB_HOT, 0.3 + 0.55 * t)
-            else:
-                color = brand
-            segs.append(("█", color))
+            segs.append(("█", fill))
         else:
-            segs.append(("░", _RGB_EMPTY))
+            segs.append(("░", empty))
     return segs
 
 
-def _ns_color(rgb: tuple[int, int, int], alpha: float = 1.0):
+def _ns_color(rgb: tuple[int, int, int] | None, alpha: float = 1.0):
     from AppKit import NSColor  # type: ignore
 
+    if rgb is None:
+        # System menu label — adapts to light/dark automatically.
+        return NSColor.labelColor()
     r, g, b = rgb[0] / 255.0, rgb[1] / 255.0, rgb[2] / 255.0
     return NSColor.colorWithCalibratedRed_green_blue_alpha_(r, g, b, alpha)
 
@@ -212,7 +272,10 @@ def _attributed_title(
     *,
     size: float = 13.0,
 ):
-    """Build a multi-color NSAttributedString for an NSMenuItem title."""
+    """Build a multi-color NSAttributedString for an NSMenuItem title.
+
+    rgb=None → system label color (chrome text). Only bars / % should pass colors.
+    """
     try:
         from AppKit import (  # type: ignore
             NSFont,
@@ -228,11 +291,10 @@ def _attributed_title(
     for text, rgb in parts:
         if not text:
             continue
-        color = _ns_color(rgb) if rgb is not None else _ns_color(_RGB_TITLE)
         chunk = NSMutableAttributedString.alloc().initWithString_attributes_(
             text,
             {
-                NSForegroundColorAttributeName: color,
+                NSForegroundColorAttributeName: _ns_color(rgb),
                 NSFontAttributeName: font,
             },
         )
@@ -256,25 +318,16 @@ def _set_colored_title(
         pass
 
 
-def _force_dark_appearance() -> None:
-    """Force this app's menus into dark mode (VS Code–like chrome).
-
-    System light mode otherwise paints a white menu under our Dark+ colors,
-    which makes them look washed out / unchanged.
-    """
-    try:
-        from AppKit import NSAppearance, NSApplication  # type: ignore
-
-        app = NSApplication.sharedApplication()
-        dark = NSAppearance.appearanceNamed_("NSAppearanceNameDarkAqua")
-        if dark is not None and app is not None:
-            app.setAppearance_(dark)
-    except Exception:  # noqa: BLE001
-        pass
-
-
-def _render_single_bar_icon(pct: float, rgb: tuple[int, int, int]) -> Path | None:
-    """Rounded usage pill for the menu bar — brand fill that heats up at high %."""
+def _render_single_bar_icon(
+    pct: float,
+    rgb: tuple[int, int, int],
+    *,
+    empty: tuple[int, int, int] = _RGB_EMPTY_LIGHT,
+    warn: tuple[int, int, int] = _RGB_WARN,
+    hot: tuple[int, int, int] = _RGB_HOT,
+    crit: tuple[int, int, int] = _RGB_CRIT,
+) -> Path | None:
+    """Rounded usage pill — muted fill, system-agnostic track."""
     try:
         from AppKit import (  # type: ignore
             NSBezierPath,
@@ -321,19 +374,14 @@ def _render_single_bar_icon(pct: float, rgb: tuple[int, int, int]) -> Path | Non
         y = pad
         radius = bar_h / 2
 
-        # Dark HUD track
-        NSColor.colorWithCalibratedRed_green_blue_alpha_(0.10, 0.10, 0.14, 1.0).set()
+        er, eg, eb = empty[0] / 255.0, empty[1] / 255.0, empty[2] / 255.0
+        NSColor.colorWithCalibratedRed_green_blue_alpha_(er, eg, eb, 1.0).set()
         track = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
             NSMakeRect(pad, y, track_w, bar_h), radius, radius
         )
         track.fill()
-        # Neon-ish edge using brand color at low alpha
-        br, bg, bb = rgb[0] / 255.0, rgb[1] / 255.0, rgb[2] / 255.0
-        NSColor.colorWithCalibratedRed_green_blue_alpha_(br, bg, bb, 0.45).set()
-        track.setLineWidth_(1.0)
-        track.stroke()
 
-        fill_rgb = _bar_color_for_pct(pct, rgb)
+        fill_rgb = _bar_color_for_pct(pct, rgb, warn=warn, hot=hot, crit=crit)
         r, g, b = fill_rgb[0] / 255.0, fill_rgb[1] / 255.0, fill_rgb[2] / 255.0
         if pct > 0:
             fill_w = max(bar_h * 0.95, track_w * (pct / 100.0))
@@ -342,10 +390,9 @@ def _render_single_bar_icon(pct: float, rgb: tuple[int, int, int]) -> Path | Non
                 NSMakeRect(pad, y, min(fill_w, track_w), bar_h), radius, radius
             )
             fill.fill()
-            # Bright specular for "lit LED" feel
-            NSColor.colorWithCalibratedRed_green_blue_alpha_(1.0, 1.0, 1.0, 0.28).set()
+            NSColor.colorWithCalibratedRed_green_blue_alpha_(1.0, 1.0, 1.0, 0.14).set()
             hi = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
-                NSMakeRect(pad + 1, y + bar_h * 0.15, min(fill_w, track_w) - 2, bar_h * 0.32),
+                NSMakeRect(pad + 1, y + bar_h * 0.18, min(fill_w, track_w) - 2, bar_h * 0.28),
                 2,
                 2,
             )
@@ -423,8 +470,8 @@ def run_menubar() -> None:
     }
 
     app = rumps.App("llm-usage", title="…", quit_button=None)
-    # Dark menu chrome so VS Code Dark+ colors read correctly (not washed on white).
-    _force_dark_appearance()
+    # Follow system light/dark for the menu chrome (NSMenu draws the background).
+    # We only color bars + %; labels stay system default.
 
     # Keep strong refs so callbacks aren't GC'd
     callbacks: list = []
@@ -463,10 +510,12 @@ def run_menubar() -> None:
             focus if p else DEFAULT_FOCUS,
             {"letter": "?", "short": "AI", "rgb": (140, 150, 160)},
         )
-        rgb = style["rgb"]
+        pal = _appearance_palette()
+        pid_key = focus if p else DEFAULT_FOCUS
+        rgb = pal["brands"].get(pid_key, style["rgb"])
 
         if pct is None:
-            key = f"{focus}:none"
+            key = f"{focus}:none:{pal['dark']}"
             if state.get("status_key") != key:
                 state["status_key"] = key
                 app_obj.title = f" {style['letter']}"
@@ -477,14 +526,20 @@ def run_menubar() -> None:
             return
 
         rounded = int(round(pct))
-        key = f"{focus}:{rounded}:{style['letter']}"
-        # Title string is cheap; only re-render the PNG icon when the bar moved.
+        key = f"{focus}:{rounded}:{style['letter']}:{pal['dark']}"
         app_obj.title = f" {style['letter']}{rounded}%"
         if state.get("status_key") == key:
             return
         state["status_key"] = key
 
-        path = _render_single_bar_icon(pct, rgb)
+        path = _render_single_bar_icon(
+            pct,
+            rgb,
+            empty=pal["empty"],
+            warn=pal["warn"],
+            hot=pal["hot"],
+            crit=pal["crit"],
+        )
         if path and path.exists():
             try:
                 app_obj.template = False
@@ -495,6 +550,7 @@ def run_menubar() -> None:
     def rebuild_menu(report: AggregateReport | None, error: str | None = None) -> None:
         app.menu.clear()
         callbacks.clear()
+        pal = _appearance_palette()
 
         def add_enabled(
             title: str,
@@ -508,6 +564,7 @@ def run_menubar() -> None:
             item.set_callback(cb)
             if checked:
                 item.state = 1
+            # Only set attributed titles when we need mixed system + accent colors.
             if parts:
                 _set_colored_title(item, parts, title)
             app.menu.add(item)
@@ -515,39 +572,46 @@ def run_menubar() -> None:
             return item
 
         if error:
+            # System label + red error accent on the message only.
             add_enabled(
                 f"! {error[:70]}",
-                parts=[("! ", _RGB_HOT), (error[:70], _RGB_CRIT)],
+                parts=[("! ", None), (error[:70], pal["crit"])],
             )
 
         if report is None:
-            add_enabled(
-                "Loading…",
-                parts=[("Loading…", _RGB_MUTED)],
-            )
+            add_enabled("Loading…")  # plain system color
         else:
-            stamp = (
+            add_enabled(
                 f"Updated {datetime.now().strftime('%H:%M:%S')}  ·  "
                 f"{report.period_start} → {report.period_end}"
             )
-            add_enabled(stamp, parts=[(stamp, _RGB_MUTED)])
             app.menu.add(None)
 
-            # ── Per-provider usage (colored bars, no emoji) ──
+            # ── Per-provider: system labels, colored bar + % only ──
             for p in report.providers:
                 pct = _quota_of(p)
                 style = PROVIDER_STYLE.get(
                     p.provider.value,
                     {"letter": "?", "rgb": (120, 140, 160)},
                 )
-                brand = style["rgb"]
+                brand = pal["brands"].get(p.provider.value, style["rgb"])
                 letter = style.get("letter") or "?"
                 if pct is not None:
                     q = _display_quota(p) or {}
                     plan = q.get("plan") or ""
                     label = (q.get("label") or "").replace(" limit", "").strip()
-                    pct_rgb = _pct_rgb(pct, brand)
-                    bar_segs = _bar_segments(pct, 10, brand)
+                    pct_rgb = _pct_rgb(
+                        pct, brand, warn=pal["warn"], hot=pal["hot"], crit=pal["crit"]
+                    )
+                    bar_segs = _bar_segments(
+                        pct,
+                        10,
+                        brand,
+                        empty=pal["empty"],
+                        warn=pal["warn"],
+                        hot=pal["hot"],
+                        crit=pal["crit"],
+                    )
                     plain_bar = "".join(c for c, _ in bar_segs)
 
                     line = f"{letter}  {p.display_name}  {plain_bar}  {pct:.0f}%"
@@ -556,16 +620,16 @@ def run_menubar() -> None:
                     if plan:
                         line += f"  ·  {plan}"
 
+                    # None = system label color (chrome stays calm).
                     parts: list[tuple[str, tuple[int, int, int] | None]] = [
-                        (f"{letter}  ", brand),
-                        (f"{p.display_name}  ", brand),
+                        (f"{letter}  {p.display_name}  ", None),
+                        *bar_segs,
+                        (f"  {pct:.0f}%", pct_rgb),
                     ]
-                    parts.extend(bar_segs)
-                    parts.append((f"  {pct:.0f}%", pct_rgb))
                     if label:
-                        parts.append((f"  ·  {label}", _RGB_MUTED))
+                        parts.append((f"  ·  {label}", None))
                     if plan:
-                        parts.append((f"  ·  {plan}", brand))
+                        parts.append((f"  ·  {plan}", None))
 
                     item = add_enabled(line, parts=parts)
 
@@ -573,15 +637,31 @@ def run_menubar() -> None:
                         if w.get("used_percent") is None:
                             continue
                         wp = float(w["used_percent"])
-                        w_brand = brand
-                        w_segs = _bar_segments(wp, 8, w_brand)
+                        w_segs = _bar_segments(
+                            wp,
+                            8,
+                            brand,
+                            empty=pal["empty"],
+                            warn=pal["warn"],
+                            hot=pal["hot"],
+                            crit=pal["crit"],
+                        )
                         w_plain = "".join(c for c, _ in w_segs)
                         w_label = str(w.get("label") or "window")
                         w_line = f"    {w_label}  {w_plain}  {wp:.0f}%"
                         w_parts: list[tuple[str, tuple[int, int, int] | None]] = [
-                            (f"    {w_label}  ", _RGB_MUTED),
+                            (f"    {w_label}  ", None),
                             *w_segs,
-                            (f"  {wp:.0f}%", _pct_rgb(wp, w_brand)),
+                            (
+                                f"  {wp:.0f}%",
+                                _pct_rgb(
+                                    wp,
+                                    brand,
+                                    warn=pal["warn"],
+                                    hot=pal["hot"],
+                                    crit=pal["crit"],
+                                ),
+                            ),
                         ]
                         sub = rumps.MenuItem(w_line)
                         sub.set_callback(noop)
@@ -599,51 +679,24 @@ def run_menubar() -> None:
                             )
                             sub = rumps.MenuItem(reset_txt)
                             sub.set_callback(noop)
-                            _set_colored_title(
-                                sub, [(reset_txt, _RGB_MUTED)], reset_txt
-                            )
                             item.add(sub)
                             callbacks.append(sub)
                         except ValueError:
                             pass
                 elif p.requests or p.total_tokens:
                     cost = f"  ·  ${p.cost_usd:.2f}" if p.cost_usd is not None else ""
-                    line = (
+                    add_enabled(
                         f"{letter}  {p.display_name}  ·  "
                         f"{p.requests:,} req  ·  {p.total_tokens:,} tok{cost}"
                     )
-                    add_enabled(
-                        line,
-                        parts=[
-                            (f"{letter}  ", brand),
-                            (f"{p.display_name}  ·  ", brand),
-                            (
-                                f"{p.requests:,} req  ·  {p.total_tokens:,} tok{cost}",
-                                _RGB_MUTED,
-                            ),
-                        ],
-                    )
                 else:
-                    line = f"{letter}  {p.display_name}  ·  not configured"
-                    add_enabled(
-                        line,
-                        parts=[
-                            (f"{letter}  ", _RGB_MUTED),
-                            (f"{p.display_name}  ·  ", _RGB_MUTED),
-                            ("not configured", _RGB_EMPTY),
-                        ],
-                    )
+                    add_enabled(f"{letter}  {p.display_name}  ·  not configured")
 
             app.menu.add(None)
 
             # ── Switch which bar shows in the menu bar ──
             focus_menu = rumps.MenuItem("Show in menu bar")
             focus_menu.set_callback(noop)
-            _set_colored_title(
-                focus_menu,
-                [("Show in menu bar", _RGB_LINK)],
-                "Show in menu bar",
-            )
             callbacks.append(focus_menu)
 
             for pid in FOCUS_ORDER:
@@ -651,29 +704,34 @@ def run_menubar() -> None:
                 if prov is None:
                     continue
                 style = PROVIDER_STYLE.get(
-                    pid, {"short": pid, "letter": "?", "rgb": _RGB_MUTED}
+                    pid, {"short": pid, "letter": "?", "rgb": (120, 140, 160)}
                 )
-                brand = style["rgb"]
+                brand = pal["brands"].get(pid, style["rgb"])
                 letter = style.get("letter") or "?"
                 pct = _quota_of(prov)
                 if pct is not None:
                     label = f"{letter}  {style['short']}  ·  {pct:.0f}%"
                     parts = [
-                        (f"{letter}  ", brand),
-                        (f"{style['short']}  ·  ", brand),
-                        (f"{pct:.0f}%", _pct_rgb(pct, brand)),
+                        (f"{letter}  {style['short']}  ·  ", None),
+                        (
+                            f"{pct:.0f}%",
+                            _pct_rgb(
+                                pct,
+                                brand,
+                                warn=pal["warn"],
+                                hot=pal["hot"],
+                                crit=pal["crit"],
+                            ),
+                        ),
                     ]
                 elif prov.source.value == "unavailable" and not (
                     prov.requests or prov.total_tokens
                 ):
                     label = f"{letter}  {style['short']}  ·  n/a"
-                    parts = [
-                        (f"{letter}  ", _RGB_MUTED),
-                        (f"{style['short']}  ·  n/a", _RGB_EMPTY),
-                    ]
+                    parts = None
                 else:
                     label = f"{letter}  {style['short']}"
-                    parts = [(f"{letter}  ", brand), (style["short"], brand)]
+                    parts = None
 
                 def _make_cb(provider_id: str):
                     def _cb(_=None, _pid=provider_id) -> None:
@@ -683,7 +741,8 @@ def run_menubar() -> None:
 
                 sub = rumps.MenuItem(label)
                 sub.set_callback(_make_cb(pid))
-                _set_colored_title(sub, parts, label)
+                if parts:
+                    _set_colored_title(sub, parts, label)
                 if state["focus"] == pid or (
                     state["focus"] == "openai" and pid == "codex"
                 ):
@@ -699,35 +758,14 @@ def run_menubar() -> None:
             costs = [p.cost_usd for p in report.providers if p.cost_usd is not None]
             if costs:
                 app.menu.add(None)
-                cost_line = f"Known cost: ${sum(costs):.2f}"
-                add_enabled(
-                    cost_line,
-                    parts=[
-                        ("Known cost: ", _RGB_MUTED),
-                        (f"${sum(costs):.2f}", _RGB_WARN),
-                    ],
-                )
+                add_enabled(f"Known cost: ${sum(costs):.2f}")
 
         app.menu.add(None)
 
+        # Chrome actions: plain system label color (no rainbow links).
         open_dash = rumps.MenuItem("Open Dashboard")
         refresh_item = rumps.MenuItem("Refresh Now")
         quit_item = rumps.MenuItem("Quit llm-usage")
-        _set_colored_title(
-            open_dash,
-            [("Open Dashboard", _RGB_LINK)],
-            "Open Dashboard",
-        )
-        _set_colored_title(
-            refresh_item,
-            [("Refresh Now", _RGB_OK)],
-            "Refresh Now",
-        )
-        _set_colored_title(
-            quit_item,
-            [("Quit llm-usage", _RGB_MUTED)],
-            "Quit llm-usage",
-        )
 
         def _authenticated_dashboard_url() -> str | None:
             """URL for an already-running dashboard, with its token if we can
