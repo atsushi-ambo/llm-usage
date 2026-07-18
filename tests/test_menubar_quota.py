@@ -1,4 +1,11 @@
-from llm_usage.menubar import _display_quota, _quota_of
+from llm_usage.menubar import (
+    _bar_segments,
+    _display_quota,
+    _mood_emoji,
+    _pct_rgb,
+    _quota_of,
+    _unicode_bar,
+)
 from llm_usage.models import ProviderId, ProviderReport, SourceKind
 
 
@@ -69,3 +76,30 @@ def test_no_quota_returns_none():
     )
     assert _quota_of(p) is None
     assert _display_quota(p) is None
+
+
+def test_mood_emoji_escalates_with_usage():
+    assert _mood_emoji(10) == "🌿"
+    assert _mood_emoji(45) == "✨"
+    assert _mood_emoji(75) == "⚡"
+    assert _mood_emoji(95) == "🔥"
+
+
+def test_bar_segments_fill_count_matches_percent():
+    segs = _bar_segments(50.0, width=10, brand=(100, 100, 200))
+    assert len(segs) == 10
+    filled = sum(1 for ch, _ in segs if ch == "●")
+    empty = sum(1 for ch, _ in segs if ch == "○")
+    assert filled == 5
+    assert empty == 5
+
+
+def test_unicode_bar_still_available_as_plain_fallback():
+    assert _unicode_bar(0, 5) == "░░░░░"
+    assert _unicode_bar(100, 5) == "█████"
+
+
+def test_pct_rgb_heats_up():
+    brand = (100, 100, 200)
+    assert _pct_rgb(10, brand) == brand
+    assert _pct_rgb(95, brand) != brand
