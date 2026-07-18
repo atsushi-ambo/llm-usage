@@ -91,7 +91,9 @@ def test_unicode_bar_still_available_as_plain_fallback():
     assert _unicode_bar(100, 5) == "█████"
 
 
-def test_pct_rgb_heats_up():
+def test_pct_rgb_keeps_brand_until_high_usage():
     brand = (100, 100, 200)
     assert _pct_rgb(10, brand) == brand
-    assert _pct_rgb(95, brand) != brand
+    assert _pct_rgb(60, brand) == brand
+    assert _pct_rgb(80, brand) != brand  # warn/hot
+    assert _pct_rgb(95, brand) != brand  # crit
