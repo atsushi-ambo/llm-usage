@@ -27,25 +27,45 @@ from llm_usage.serialize import report_to_dict
 DEFAULT_SNAPSHOT_TTL_S = 90.0
 
 
-def collect_all(settings: Settings, days: int | None = None) -> AggregateReport:
-    """Run every provider collector and return a unified report."""
+def collect_all(
+    settings: Settings,
+    days: int | None = None,
+    *,
+    quota_only: bool = False,
+) -> AggregateReport:
+    """Run every provider collector and return a unified report.
+
+    quota_only=True (menubar): skip local log scans, org usage time-series,
+    and model-list calls. Only fetch subscription / credit bars so the
+    long-running menubar process stays light on RAM and CPU.
+    """
     window = days if days is not None else settings.days
     end = date.today()
     start = end - timedelta(days=max(window - 1, 0))
 
-    claude = collect_claude(settings, start, end)
-    openai = collect_openai(settings, start, end)
-    codex = collect_codex(settings, start, end)
-    # Merge Platform API (OpenAI) into Codex/ChatGPT plan card — one OpenAI family row
+    claude = collect_claude(settings, start, end, quota_only=quota_only)
+    codex = collect_codex(settings, start, end, quota_only=quota_only)
+    if quota_only:
+        # Platform API org usage is heavy and not shown as a menu bar % —
+        # Codex live quota alone is enough for the OpenAI family row.
+        openai = ProviderReport(
+            provider=ProviderId.OPENAI,
+            display_name="OpenAI",
+            source=SourceKind.UNAVAILABLE,
+            period_start=start,
+            period_end=end,
+        )
+    else:
+        openai = collect_openai(settings, start, end)
     openai_family = _merge_openai_family(codex, openai)
 
     reports: list[ProviderReport] = [
         claude,
         openai_family,
-        collect_xai(settings, start, end),
-        collect_cursor(settings, start, end),
-        collect_gemini(settings, start, end),
-        collect_openrouter(settings, start, end),
+        collect_xai(settings, start, end, quota_only=quota_only),
+        collect_cursor(settings, start, end, quota_only=quota_only),
+        collect_gemini(settings, start, end, quota_only=quota_only),
+        collect_openrouter(settings, start, end, quota_only=quota_only),
     ]
 
     return AggregateReport(period_start=start, period_end=end, providers=reports)
@@ -57,17 +77,22 @@ def collect_all_cached(
     *,
     ttl_s: float = DEFAULT_SNAPSHOT_TTL_S,
     force_refresh: bool = False,
+    quota_only: bool = False,
 ) -> AggregateReport:
     """collect_all(), reused across processes/frontends for `ttl_s` seconds
     via a disk-backed snapshot (~/.config/llm-usage/cache). CLI, dashboard,
     and menubar invocations that land within the same window share one
     collection instead of each independently re-hitting every provider API.
 
-    Keyed only by the resolved --days window — fine for this single-user
-    local tool, where credentials/settings are stable across invocations.
+    Keyed by the resolved --days window and quota_only flag so the menubar's
+    light snapshot never collides with a full CLI/dashboard report.
     """
     window = days if days is not None else settings.days
-    cache_name = f"report_snapshot_{window}.json"
+    cache_name = (
+        f"report_snapshot_quota_{window}.json"
+        if quota_only
+        else f"report_snapshot_{window}.json"
+    )
 
     if not force_refresh and ttl_s > 0:
         cached = read_json_cache(cache_name, max_age_s=ttl_s)
@@ -77,7 +102,7 @@ def collect_all_cached(
             except Exception:  # noqa: BLE001
                 pass  # corrupt/incompatible cache entry — fall through
 
-    report = collect_all(settings, days=days)
+    report = collect_all(settings, days=days, quota_only=quota_only)
     if ttl_s > 0:
         # Strip raw upstream payloads before disk — smaller cache, less RAM
         # when reloading, and avoids parking OAuth bodies on disk.

@@ -34,7 +34,13 @@ from llm_usage.quota import (
 _CACHE_NAME = "claude_oauth_usage.json"
 
 
-def collect_claude(settings: Settings, start: date, end: date) -> ProviderReport:
+def collect_claude(
+    settings: Settings,
+    start: date,
+    end: date,
+    *,
+    quota_only: bool = False,
+) -> ProviderReport:
     report = ProviderReport(
         provider=ProviderId.CLAUDE,
         display_name="Claude Code",
@@ -48,34 +54,35 @@ def collect_claude(settings: Settings, start: date, end: date) -> ProviderReport
     if cred_meta.get("plan"):
         report.meta["plan_type"] = cred_meta["plan"]
 
-    # 1) Admin Usage + Cost API (most accurate for Console org)
-    if settings.anthropic_admin_key:
-        try:
-            _fill_from_admin_api(report, settings.anthropic_admin_key, start, end)
-            report.source = SourceKind.API
-        except Exception as exc:  # noqa: BLE001
-            report.errors.append(f"Admin API: {safe_error_str(exc)}")
+    if not quota_only:
+        # 1) Admin Usage + Cost API (most accurate for Console org)
+        if settings.anthropic_admin_key:
+            try:
+                _fill_from_admin_api(report, settings.anthropic_admin_key, start, end)
+                report.source = SourceKind.API
+            except Exception as exc:  # noqa: BLE001
+                report.errors.append(f"Admin API: {safe_error_str(exc)}")
 
-    # 2) Local Claude Code transcripts (always useful; fills gaps)
-    local = _scan_local_logs(settings.claude_projects_dir, start, end)
-    if local["requests"] > 0:
-        if report.source == SourceKind.UNAVAILABLE:
-            report.source = SourceKind.LOCAL_LOGS
-            _apply_local(report, local)
-            report.notes.append(
-                "Estimated from local Claude Code session logs "
-                f"({settings.claude_projects_dir})"
-            )
-        else:
-            report.meta["local_tokens"] = local["total_tokens"]
-            report.meta["local_requests"] = local["requests"]
-            report.notes.append(
-                f"Local Claude Code logs: {local['requests']:,} msgs, "
-                f"{local['total_tokens']:,} tokens (estimate)"
-            )
-            if not report.models:
-                report.models = local["models"]
-                report.daily = local["daily"]
+        # 2) Local Claude Code transcripts (always useful; fills gaps)
+        local = _scan_local_logs(settings.claude_projects_dir, start, end)
+        if local["requests"] > 0:
+            if report.source == SourceKind.UNAVAILABLE:
+                report.source = SourceKind.LOCAL_LOGS
+                _apply_local(report, local)
+                report.notes.append(
+                    "Estimated from local Claude Code session logs "
+                    f"({settings.claude_projects_dir})"
+                )
+            else:
+                report.meta["local_tokens"] = local["total_tokens"]
+                report.meta["local_requests"] = local["requests"]
+                report.notes.append(
+                    f"Local Claude Code logs: {local['requests']:,} msgs, "
+                    f"{local['total_tokens']:,} tokens (estimate)"
+                )
+                if not report.models:
+                    report.models = local["models"]
+                    report.daily = local["daily"]
 
     # 3) Subscription / rate-limit quota (claude.ai / Claude Code OAuth)
     # Prefer macOS Keychain — ~/.claude/.credentials.json is often stale.

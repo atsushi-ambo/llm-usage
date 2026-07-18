@@ -24,7 +24,13 @@ from llm_usage.providers.base import parse_iso_date, safe_error_str, safe_float,
 _BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits"
 
 
-def collect_xai(settings: Settings, start: date, end: date) -> ProviderReport:
+def collect_xai(
+    settings: Settings,
+    start: date,
+    end: date,
+    *,
+    quota_only: bool = False,
+) -> ProviderReport:
     report = ProviderReport(
         provider=ProviderId.GROK,
         display_name="Grok Build / xAI",
@@ -45,27 +51,29 @@ def collect_xai(settings: Settings, start: date, end: date) -> ProviderReport:
     except Exception as exc:  # noqa: BLE001
         report.errors.append(f"Live Grok billing: {exc}")
 
-    # 2) Local inference logs for token totals (still useful history)
-    build = _scan_grok_build(settings.grok_home_dir, start, end)
-    if build["requests"] > 0:
-        report.source = SourceKind.LOCAL_LOGS
-        report.input_tokens = build["input_tokens"]
-        report.output_tokens = build["output_tokens"]
-        report.cache_read_tokens = build["cache_read_tokens"]
-        report.requests = build["requests"]
-        report.models = build["models"]
-        report.daily = build["daily"]
-        report.meta["sessions"] = build.get("sessions")
-        report.cost_usd = None
-        report.notes.append(
-            "Token totals from ~/.grok/logs/unified.jsonl "
-            "(inference_done events in range)."
-        )
+    # 2) Local inference logs for token totals (skipped in quota_only / menubar)
+    build: dict[str, Any] = {}
+    if not quota_only:
+        build = _scan_grok_build(settings.grok_home_dir, start, end)
+        if build["requests"] > 0:
+            report.source = SourceKind.LOCAL_LOGS
+            report.input_tokens = build["input_tokens"]
+            report.output_tokens = build["output_tokens"]
+            report.cache_read_tokens = build["cache_read_tokens"]
+            report.requests = build["requests"]
+            report.models = build["models"]
+            report.daily = build["daily"]
+            report.meta["sessions"] = build.get("sessions")
+            report.cost_usd = None
+            report.notes.append(
+                "Token totals from ~/.grok/logs/unified.jsonl "
+                "(inference_done events in range)."
+            )
 
     # Prefer live billing for quota %; fall back to log only if period still active
     billing = live_billing
     billing_source = "live"
-    if billing is None:
+    if billing is None and not quota_only:
         log_billing = build.get("billing")
         if log_billing and not _period_ended(log_billing.get("period") or {}):
             billing = log_billing
@@ -85,6 +93,15 @@ def collect_xai(settings: Settings, start: date, end: date) -> ProviderReport:
         _apply_billing_quota(report, billing, source=billing_source)
         if report.source == SourceKind.UNAVAILABLE:
             report.source = SourceKind.API if billing_source == "live" else SourceKind.LOCAL_LOGS
+
+    if quota_only:
+        # Menubar only needs the credit bar — skip session walk + model lists.
+        if report.source == SourceKind.UNAVAILABLE:
+            report.notes.append(
+                "No Grok Build data found. Run `grok` (X Premium / SuperGrok) or set "
+                "XAI_API_KEY for the developer API."
+            )
+        return report
 
     # 3) Session summaries as backup activity counts
     sess = _scan_session_summaries(settings.grok_home_dir / "sessions", start, end)

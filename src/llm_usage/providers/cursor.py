@@ -19,7 +19,13 @@ from llm_usage.models import (
 from llm_usage.providers.base import safe_error_str, safe_float, safe_int
 
 
-def collect_cursor(settings: Settings, start: date, end: date) -> ProviderReport:
+def collect_cursor(
+    settings: Settings,
+    start: date,
+    end: date,
+    *,
+    quota_only: bool = False,
+) -> ProviderReport:
     report = ProviderReport(
         provider=ProviderId.CURSOR,
         display_name="Cursor",
@@ -28,6 +34,13 @@ def collect_cursor(settings: Settings, start: date, end: date) -> ProviderReport
         period_end=end,
         meta={"console_url": "https://cursor.com/dashboard"},
     )
+
+    # Menubar: only hit network if the user configured credentials.
+    if quota_only and not (settings.cursor_api_key or settings.cursor_session_token):
+        report.notes.append(
+            "Set CURSOR_API_KEY or CURSOR_SESSION_TOKEN for Cursor usage."
+        )
+        return report
 
     if settings.cursor_api_key:
         try:

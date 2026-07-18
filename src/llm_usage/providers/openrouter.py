@@ -17,7 +17,13 @@ from llm_usage.models import ProviderId, ProviderReport, SourceKind
 from llm_usage.providers.base import safe_error_str, safe_float
 
 
-def collect_openrouter(settings: Settings, start: date, end: date) -> ProviderReport:
+def collect_openrouter(
+    settings: Settings,
+    start: date,
+    end: date,
+    *,
+    quota_only: bool = False,
+) -> ProviderReport:
     report = ProviderReport(
         provider=ProviderId.OPENROUTER,
         display_name="OpenRouter",
@@ -33,6 +39,7 @@ def collect_openrouter(settings: Settings, start: date, end: date) -> ProviderRe
             "Set OPENROUTER_API_KEY for pay-as-you-go credit/usage info."
         )
         return report
+    # quota_only is accepted for collector API symmetry; this path is already light.
 
     try:
         info = _fetch_key_info(key)

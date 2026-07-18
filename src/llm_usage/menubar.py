@@ -15,13 +15,12 @@ from llm_usage.config import load_settings
 from llm_usage.models import AggregateReport, ProviderId, ProviderReport
 from llm_usage.quota import atomic_write_json, quota_windows
 
-# Poll gently: quota barely moves minute-to-minute, and a full collect is
-# the expensive part. 3 minutes keeps the bar fresh without thrashing RAM.
-REFRESH_SECONDS = 180
-# Menubar only needs quotas + light totals — no 30-day model breakdown.
-MENUBAR_DAYS = 7
-# Prefer reusing the shared disk snapshot over a fresh collect when possible.
-MENUBAR_SNAPSHOT_TTL_S = 120.0
+# Poll gently — quota barely moves minute-to-minute. Less frequent = less RAM/CPU.
+REFRESH_SECONDS = 300
+# Menubar uses quota_only collection (no log scans); days only labels the period.
+MENUBAR_DAYS = 1
+# Reuse the light quota snapshot between polls.
+MENUBAR_SNAPSHOT_TTL_S = 240.0
 PREFS_PATH = Path.home() / ".config" / "llm-usage" / "menubar.json"
 NOTIFY_THRESHOLDS = (70, 90)
 
@@ -407,11 +406,12 @@ def _collect_menubar_report(
     ttl_s: float,
     force_refresh: bool,
 ) -> AggregateReport:
-    """Collect usage and immediately drop heavy fields the menu never shows.
+    """Quota-only collect for the menubar — no local log scans.
 
-    Full collection still runs (shared snapshot cache helps), but the long-lived
-    menubar process only retains a compact quota snapshot — not per-model
-    history, daily series, or raw OAuth bodies.
+    Skips Claude/Codex/Grok session JSONL walks, OpenAI org usage series,
+    Gemini log scans, and model-list API calls. Only hits the small
+    subscription/credit endpoints the % bars need, then slims the result
+    so the long-lived process keeps almost nothing in RAM between polls.
     """
     from llm_usage.config import load_settings
     from llm_usage.providers import collect_all_cached
@@ -423,6 +423,7 @@ def _collect_menubar_report(
         days=days,
         ttl_s=ttl_s,
         force_refresh=force_refresh,
+        quota_only=True,
     )
     return slim_report_for_menubar(report)
 

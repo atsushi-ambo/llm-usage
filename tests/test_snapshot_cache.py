@@ -13,7 +13,7 @@ def _settings() -> Settings:
 def test_second_call_within_ttl_reuses_snapshot(monkeypatch):
     calls = []
 
-    def fake_collect_all(settings, days=None):
+    def fake_collect_all(settings, days=None, *, quota_only=False):
         calls.append(days)
         return AggregateReport(period_start=date(2026, 7, 1), period_end=date(2026, 7, 10))
 
@@ -30,7 +30,7 @@ def test_second_call_within_ttl_reuses_snapshot(monkeypatch):
 def test_force_refresh_bypasses_cache(monkeypatch):
     calls = []
 
-    def fake_collect_all(settings, days=None):
+    def fake_collect_all(settings, days=None, *, quota_only=False):
         calls.append(days)
         return AggregateReport(period_start=date(2026, 7, 1), period_end=date(2026, 7, 10))
 
@@ -45,7 +45,7 @@ def test_force_refresh_bypasses_cache(monkeypatch):
 def test_zero_ttl_never_caches(monkeypatch):
     calls = []
 
-    def fake_collect_all(settings, days=None):
+    def fake_collect_all(settings, days=None, *, quota_only=False):
         calls.append(days)
         return AggregateReport(period_start=date(2026, 7, 1), period_end=date(2026, 7, 10))
 
@@ -60,7 +60,7 @@ def test_zero_ttl_never_caches(monkeypatch):
 def test_different_days_windows_do_not_share_a_snapshot(monkeypatch):
     calls = []
 
-    def fake_collect_all(settings, days=None):
+    def fake_collect_all(settings, days=None, *, quota_only=False):
         calls.append(days)
         return AggregateReport(period_start=date(2026, 7, 1), period_end=date(2026, 7, 10))
 

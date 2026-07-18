@@ -22,7 +22,13 @@ from llm_usage.models import (
 from llm_usage.providers.base import parse_iso_date, safe_error_str, safe_int
 
 
-def collect_codex(settings: Settings, start: date, end: date) -> ProviderReport:
+def collect_codex(
+    settings: Settings,
+    start: date,
+    end: date,
+    *,
+    quota_only: bool = False,
+) -> ProviderReport:
     report = ProviderReport(
         provider=ProviderId.CODEX,
         display_name="Codex (ChatGPT plan)",
@@ -36,24 +42,25 @@ def collect_codex(settings: Settings, start: date, end: date) -> ProviderReport:
     )
 
     root = settings.codex_home_dir
-    local = _scan_sessions(root / "sessions", start, end)
-    if local["requests"] > 0:
-        report.source = SourceKind.LOCAL_LOGS
-        report.input_tokens = local["input_tokens"]
-        report.output_tokens = local["output_tokens"]
-        report.cache_read_tokens = local["cache_read_tokens"]
-        report.requests = local["requests"]
-        report.cost_usd = None  # plan quota, not Platform API $
-        report.models = local["models"]
-        report.daily = local["daily"]
-        report.meta["sessions"] = local["sessions"]
-        report.meta["plan_type_seen"] = local.get("plan_type")
-        report.notes.append(
-            f"From local Codex rollouts under {root / 'sessions'} "
-            "(ChatGPT plan usage, not Platform API billing)."
-        )
-        if local.get("plan_type"):
-            report.notes.append(f"Plan type in logs: {local['plan_type']}")
+    if not quota_only:
+        local = _scan_sessions(root / "sessions", start, end)
+        if local["requests"] > 0:
+            report.source = SourceKind.LOCAL_LOGS
+            report.input_tokens = local["input_tokens"]
+            report.output_tokens = local["output_tokens"]
+            report.cache_read_tokens = local["cache_read_tokens"]
+            report.requests = local["requests"]
+            report.cost_usd = None  # plan quota, not Platform API $
+            report.models = local["models"]
+            report.daily = local["daily"]
+            report.meta["sessions"] = local["sessions"]
+            report.meta["plan_type_seen"] = local.get("plan_type")
+            report.notes.append(
+                f"From local Codex rollouts under {root / 'sessions'} "
+                "(ChatGPT plan usage, not Platform API billing)."
+            )
+            if local.get("plan_type"):
+                report.notes.append(f"Plan type in logs: {local['plan_type']}")
 
     auth_path = root / "auth.json"
     token_info = _read_codex_auth(auth_path)

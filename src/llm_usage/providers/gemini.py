@@ -23,7 +23,13 @@ from llm_usage.pricing import estimate_cost
 from llm_usage.providers.base import parse_iso_date, safe_error_str, safe_int
 
 
-def collect_gemini(settings: Settings, start: date, end: date) -> ProviderReport:
+def collect_gemini(
+    settings: Settings,
+    start: date,
+    end: date,
+    *,
+    quota_only: bool = False,
+) -> ProviderReport:
     report = ProviderReport(
         provider=ProviderId.GEMINI,
         display_name="Gemini / Google",
@@ -35,6 +41,11 @@ def collect_gemini(settings: Settings, start: date, end: date) -> ProviderReport
             "billing_url": "https://aistudio.google.com/billing",
         },
     )
+
+    # No subscription % bar for Gemini — menubar skips log/API probes entirely.
+    if quota_only:
+        report.notes.append("Gemini has no live quota bar (open AI Studio for usage).")
+        return report
 
     local = _scan_local_logs(settings.gemini_home_dir, start, end)
     if local["requests"] > 0:
