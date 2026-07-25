@@ -97,8 +97,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
 def _security_headers(response: Response) -> None:
     response.headers["Content-Security-Policy"] = (
+        # script-src is 'self' only (no 'unsafe-inline'): all JS lives in
+        # /static/app.js, so even if an interpolated value slipped past the
+        # esc() helper, an injected inline <script> still would not execute.
+        # style-src keeps 'unsafe-inline' for the page's <style> block and the
+        # JS-built style="width:NN%" bars (numeric, clamped in clampPct()).
         "default-src 'self'; style-src 'self' 'unsafe-inline'; "
-        "script-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+        "script-src 'self'; img-src 'self' data:; "
         "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'"
     )
     response.headers["X-Content-Type-Options"] = "nosniff"
