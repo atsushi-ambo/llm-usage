@@ -7,6 +7,7 @@ already keeps full history cheaply available; this just reshapes whatever
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 
@@ -69,7 +70,7 @@ def daily_totals(daily: list[DailyPoint], start: date, end: date) -> list[int]:
     return out
 
 
-def sparkline(values: list[float]) -> str:
+def sparkline(values: Sequence[float]) -> str:
     """Render a compact unicode sparkline for a series of non-negative values."""
     if not values:
         return ""

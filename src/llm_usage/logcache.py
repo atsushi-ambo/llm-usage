@@ -55,7 +55,61 @@ def scan_with_cache(namespace: str, path: Path, parse_fn: Callable[[Path], Any])
 
     data = parse_fn(path)
     try:
-        quota.atomic_write_json(cache_path, {"mtime": mtime, "size": size, "data": data})
+        # Compact JSON: logscan payloads are one dict per message across
+        # months of transcripts; indent=2 roughly doubles disk use.
+        # Store source path so prune_missing_sources can drop orphans.
+        quota.atomic_write_json(
+            cache_path,
+            {"mtime": mtime, "size": size, "path": str(path), "data": data},
+            indent=None,
+        )
     except OSError:
         pass
     return data
+
+
+def prune_missing_sources(namespace: str | None = None) -> int:
+    """Remove logscan cache entries whose source path no longer exists.
+
+    Session files rotate/delete under ~/.claude, ~/.codex, etc.; without a
+    sweep the SHA-1 keyed entries under cache/logscan/ stay forever.
+    Returns the number of cache files removed.
+    """
+    root = quota.cache_dir() / "logscan"
+    if namespace:
+        root = root / namespace
+    if not root.is_dir():
+        return 0
+
+    removed = 0
+    for cache_path in root.rglob("*.json"):
+        try:
+            cached = json.loads(cache_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            # Corrupt entry — drop it.
+            try:
+                cache_path.unlink(missing_ok=True)
+                removed += 1
+            except OSError:
+                pass
+            continue
+        if not isinstance(cached, dict):
+            try:
+                cache_path.unlink(missing_ok=True)
+                removed += 1
+            except OSError:
+                pass
+            continue
+        src = cached.get("path")
+        # Legacy entries without path can't be verified; leave them until
+        # the next re-write of the same key stores a path.
+        if not isinstance(src, str) or not src:
+            continue
+        if Path(src).exists():
+            continue
+        try:
+            cache_path.unlink(missing_ok=True)
+            removed += 1
+        except OSError:
+            pass
+    return removed

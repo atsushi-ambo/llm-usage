@@ -32,6 +32,9 @@ jobs:
       - name: Lint (ruff)
         run: ruff check src tests
 
+      - name: Typecheck (pyright)
+        run: pyright src
+
       - name: Test (pytest)
         run: pytest -q
 

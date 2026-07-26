@@ -9,6 +9,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+# Snapshot date for the table below (ISO). Shown next to ~ estimates so
+# consumers know how stale the list-price math might be.
+PRICES_AS_OF = "2026-07-26"
+
 
 @dataclass(frozen=True)
 class ModelPrice:
@@ -19,10 +23,29 @@ class ModelPrice:
 
 
 # Keys are lower-case substrings matched against model ids (longest match wins).
+# Anthropic rates from https://platform.claude.com/docs/en/about-claude/pricing
+# (5-minute cache writes; 1h cache is 2× base input and not modeled separately).
 PRICES: dict[str, ModelPrice] = {
-    # Anthropic (longest substring match wins)
+    # Anthropic — longest substring match wins. Order in this dict does not
+    # matter; lookup_price picks the longest matching key.
+    #
+    # Opus 4.5+ dropped to $5/$25 (from Opus 4 / 4.1 at $15/$75). Without
+    # explicit longer keys, "claude-opus-4-6" would match "claude-opus-4"
+    # and overstate spend ~3×.
+    "claude-fable-5": ModelPrice(10.0, 50.0, 1.0, 12.50),
+    "claude-fable": ModelPrice(10.0, 50.0, 1.0, 12.50),
+    "claude-mythos-5": ModelPrice(10.0, 50.0, 1.0, 12.50),
+    "claude-mythos": ModelPrice(10.0, 50.0, 1.0, 12.50),
+    "claude-opus-5": ModelPrice(5.0, 25.0, 0.50, 6.25),
+    "claude-opus-4-8": ModelPrice(5.0, 25.0, 0.50, 6.25),
+    "claude-opus-4-7": ModelPrice(5.0, 25.0, 0.50, 6.25),
+    "claude-opus-4-6": ModelPrice(5.0, 25.0, 0.50, 6.25),
+    "claude-opus-4-5": ModelPrice(5.0, 25.0, 0.50, 6.25),
+    "claude-opus-4-1": ModelPrice(15.0, 75.0, 1.50, 18.75),
     "claude-opus-4": ModelPrice(15.0, 75.0, 1.50, 18.75),
     "claude-sonnet-4": ModelPrice(3.0, 15.0, 0.30, 3.75),
+    # Sonnet 5 intro ($2/$10) runs through 2026-08-31; use standard $3/$15
+    # as the conservative list-price estimate.
     "claude-sonnet-5": ModelPrice(3.0, 15.0, 0.30, 3.75),
     "claude-haiku-4": ModelPrice(1.0, 5.0, 0.10, 1.25),
     "claude-3-5-sonnet": ModelPrice(3.0, 15.0, 0.30, 3.75),
@@ -31,7 +54,8 @@ PRICES: dict[str, ModelPrice] = {
     "claude-3-sonnet": ModelPrice(3.0, 15.0),
     "claude-3-haiku": ModelPrice(0.25, 1.25),
     "claude-sonnet": ModelPrice(3.0, 15.0, 0.30, 3.75),
-    "claude-opus": ModelPrice(15.0, 75.0, 1.50, 18.75),
+    # Modern Opus default for unknown future ids (legacy 4/4.1 have longer keys).
+    "claude-opus": ModelPrice(5.0, 25.0, 0.50, 6.25),
     "claude-haiku": ModelPrice(1.0, 5.0, 0.10, 1.25),
     # OpenAI
     "gpt-4.1": ModelPrice(2.0, 8.0),

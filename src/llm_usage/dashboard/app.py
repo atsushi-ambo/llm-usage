@@ -165,4 +165,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     return app
 
 
-app = create_app()
+# Intentionally no module-level `app = create_app()`.
+# create_app() loads settings, mints a session token, and writes
+# dashboard_session.json — side effects that must not run on import
+# (cli.py imports create_app only; tests / python -c must not poison the
+# menubar's "Open Dashboard" token for a process that never started).
+# Run via: `llm-usage dashboard` or uvicorn with factory=True on create_app.

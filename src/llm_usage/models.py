@@ -108,10 +108,45 @@ class AggregateReport(BaseModel):
 
     @property
     def total_cost_usd(self) -> float | None:
+        """Sum of every provider cost_usd (billed + estimated).
+
+        Prefer billed_cost_usd / estimated_cost_usd when presenting totals —
+        this property still exists for callers that only need a single number.
+        """
         costs = [p.cost_usd for p in self.providers if p.cost_usd is not None]
         if not costs:
             return None
         return sum(costs)
+
+    @property
+    def billed_cost_usd(self) -> float | None:
+        """Sum of provider costs that are not list-price estimates."""
+        costs = [
+            p.cost_usd
+            for p in self.providers
+            if p.cost_usd is not None and not p.meta.get("estimated")
+        ]
+        if not costs:
+            return None
+        return sum(costs)
+
+    @property
+    def estimated_cost_usd(self) -> float | None:
+        """Sum of provider costs derived from tokens × list price."""
+        costs = [
+            p.cost_usd
+            for p in self.providers
+            if p.cost_usd is not None and p.meta.get("estimated")
+        ]
+        if not costs:
+            return None
+        return sum(costs)
+
+    @property
+    def has_estimated_cost(self) -> bool:
+        return any(
+            p.cost_usd is not None and p.meta.get("estimated") for p in self.providers
+        )
 
     @property
     def total_tokens(self) -> int:

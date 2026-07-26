@@ -25,7 +25,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=9.1.1", "ruff>=0.15.22"]
+dev = ["pytest>=9.1.1", "ruff>=0.15.22", "pyright>=1.1.400"]
 
 [project.scripts]
 llm-usage = "llm_usage.cli:app"
@@ -43,3 +43,14 @@ target-version = "py311"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.pyright]
+include = ["src"]
+exclude = [
+  # Heavy AppKit/pyobjc surface; symbols only resolve on macOS with stubs.
+  "src/llm_usage/menubar.py",
+]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
+reportMissingImports = true
+reportMissingTypeStubs = false

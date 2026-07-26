@@ -254,7 +254,11 @@ def status_cmd() -> None:
 
 
 @app.command("doctor")
-def doctor_cmd() -> None:
+def doctor_cmd(
+    fmt: OutputFormat = typer.Option(
+        OutputFormat.table, "--format", "-f", help="Output format"
+    ),
+) -> None:
     """Live-check every configured source and explain what's wrong, if anything.
 
     Unlike `status` (which only checks that credential files/dirs exist),
@@ -266,31 +270,70 @@ def doctor_cmd() -> None:
     with console.status("Running diagnostics (live checks, bypassing cache)…"):
         report = collect_all_cached(settings, days=7, force_refresh=True)
 
-    table = Table(title="llm-usage doctor", box=box.ROUNDED)
-    table.add_column("Provider", style="bold")
-    table.add_column("Status")
-    table.add_column("Details")
-
+    rows: list[dict[str, object]] = []
     healthy = True
     for p in report.providers:
         configured = p.source != SourceKind.UNAVAILABLE or bool(p.errors)
         if not configured:
-            status = Text("not configured", style="dim")
+            status = "not_configured"
         elif p.errors and p.source == SourceKind.UNAVAILABLE:
-            status = Text("error", style="red")
+            status = "error"
             healthy = False
         elif p.errors:
-            status = Text("partial", style="yellow")
+            status = "partial"
             healthy = False
         else:
-            status = Text("ok", style="green")
+            status = "ok"
 
-        details = []
+        details: list[str] = []
         if p.errors:
-            details.extend(rich_escape(e) for e in p.errors[:3])
+            details.extend(p.errors[:3])
         elif p.notes:
-            details.append(rich_escape(p.notes[0][:140]))
-        table.add_row(p.display_name, status, "\n".join(details) or "—")
+            details.append(p.notes[0][:140])
+        rows.append(
+            {
+                "provider": p.provider.value,
+                "display_name": p.display_name,
+                "status": status,
+                "source": p.source.value,
+                "errors": list(p.errors),
+                "notes": list(p.notes[:3]),
+                "details": details,
+            }
+        )
+
+    if fmt == OutputFormat.json:
+        import json
+
+        console.print_json(
+            json.dumps({"ok": healthy, "providers": rows})
+        )
+        if not healthy:
+            raise typer.Exit(1)
+        return
+
+    table = Table(title="llm-usage doctor", box=box.ROUNDED)
+    table.add_column("Provider", style="bold")
+    table.add_column("Status")
+    table.add_column("Details")
+    status_style = {
+        "not_configured": "dim",
+        "error": "red",
+        "partial": "yellow",
+        "ok": "green",
+    }
+    for row in rows:
+        st = str(row["status"])
+        detail_items = row["details"]
+        if isinstance(detail_items, list) and detail_items:
+            detail_text = "\n".join(rich_escape(str(d)) for d in detail_items)
+        else:
+            detail_text = "—"
+        table.add_row(
+            str(row["display_name"]),
+            Text(st.replace("_", " "), style=status_style.get(st, "")),
+            detail_text,
+        )
 
     console.print(table)
     if healthy:
@@ -314,33 +357,73 @@ def check_cmd(
         "--fresh",
         help="Bypass the shared snapshot cache and force a live collection.",
     ),
+    fmt: OutputFormat = typer.Option(
+        OutputFormat.table, "--format", "-f", help="Output format"
+    ),
 ) -> None:
     """Scriptable quota check for cron/CI: non-zero exit if any provider's
     quota window is at or above --fail-at (default 90%)."""
     settings = load_settings()
     with console.status("Checking quotas…"):
-        report = collect_all_cached(settings, days=7, force_refresh=fresh)
+        # Quotas only — no local log scans (cron shouldn't re-parse months
+        # of Claude/Codex transcripts just to print % used).
+        report = collect_all_cached(
+            settings, days=7, force_refresh=fresh, quota_only=True
+        )
+
+    windows: list[dict[str, object]] = []
+    breached: list[dict[str, object]] = []
+    for p in report.providers:
+        for label, pct in quota_windows(p):
+            entry = {
+                "provider": p.provider.value,
+                "display_name": p.display_name,
+                "window": label,
+                "used_percent": pct,
+            }
+            windows.append(entry)
+            if pct >= fail_at:
+                breached.append(entry)
+
+    if fmt == OutputFormat.json:
+        import json
+
+        console.print_json(
+            json.dumps(
+                {
+                    "ok": not breached,
+                    "fail_at": fail_at,
+                    "windows": windows,
+                    "breached": breached,
+                }
+            )
+        )
+        if breached:
+            raise typer.Exit(1)
+        return
 
     table = Table(box=box.SIMPLE, show_edge=False)
     table.add_column("Provider")
     table.add_column("Window")
     table.add_column("Used", justify="right")
 
-    breached: list[tuple[str, str, float]] = []
-    for p in report.providers:
-        for label, pct in quota_windows(p):
-            style = "red" if pct >= fail_at else ("yellow" if pct >= fail_at * 0.75 else "")
-            table.add_row(
-                p.display_name, label, f"[{style}]{pct:.0f}%[/{style}]" if style else f"{pct:.0f}%"
-            )
-            if pct >= fail_at:
-                breached.append((p.display_name, label, pct))
+    for entry in windows:
+        pct = float(entry["used_percent"])  # type: ignore[arg-type]
+        style = "red" if pct >= fail_at else ("yellow" if pct >= fail_at * 0.75 else "")
+        table.add_row(
+            str(entry["display_name"]),
+            str(entry["window"]),
+            f"[{style}]{pct:.0f}%[/{style}]" if style else f"{pct:.0f}%",
+        )
 
     console.print(table)
     if breached:
         console.print(f"\n[red]⚠ {len(breached)} window(s) at/above {fail_at:.0f}%:[/red]")
-        for name, label, pct in breached:
-            console.print(f"  · {name} — {label}: {pct:.0f}%")
+        for entry in breached:
+            console.print(
+                f"  · {entry['display_name']} — {entry['window']}: "
+                f"{float(entry['used_percent']):.0f}%"  # type: ignore[arg-type]
+            )
         raise typer.Exit(1)
     console.print(f"\n[green]All tracked quota windows below {fail_at:.0f}%.[/green]")
 
@@ -509,9 +592,7 @@ def _print_table(report: AggregateReport) -> None:
     table.add_column("Input tok", justify="right", footer="")
     table.add_column("Output tok", justify="right", footer="")
     table.add_column("Total tok", justify="right", footer=f"{report.total_tokens:,}")
-    cost_footer = (
-        f"${report.total_cost_usd:,.2f}" if report.total_cost_usd is not None else "—"
-    )
+    cost_footer = _combined_cost_label(report)
     table.add_column("Cost (USD)", justify="right", footer=cost_footer)
     table.add_column("Notes")
 
@@ -572,7 +653,14 @@ def _print_table(report: AggregateReport) -> None:
     if report.total_cost_usd is not None:
         console.print(
             f"\n[bold green]Combined cost (where known):[/bold green] "
-            f"${report.total_cost_usd:,.2f}"
+            f"{_combined_cost_label(report)}"
+        )
+    if report.has_estimated_cost:
+        from llm_usage.pricing import PRICES_AS_OF
+
+        console.print(
+            f"[dim]~ = estimated from public list prices "
+            f"(pricing table as of {PRICES_AS_OF}) — not an invoice.[/dim]"
         )
     console.print(
         "[dim]Tip: llm-usage dashboard  ·  llm-usage status  ·  llm-usage --format json[/dim]"
@@ -595,6 +683,19 @@ def _cost_label(p: ProviderReport) -> str:
         return "—"
     suffix = " ~" if p.meta.get("estimated") else ""
     return f"${p.cost_usd:,.2f}{suffix}"
+
+
+def _combined_cost_label(report: AggregateReport) -> str:
+    """Footer / summary line that keeps billed vs estimated distinct."""
+    billed = report.billed_cost_usd
+    estimated = report.estimated_cost_usd
+    if billed is None and estimated is None:
+        return "—"
+    if billed is not None and estimated is not None:
+        return f"${billed:,.2f} + ~${estimated:,.2f}"
+    if estimated is not None:
+        return f"~${estimated:,.2f}"
+    return f"${billed:,.2f}"
 
 
 def _notes_short(p: ProviderReport) -> str:

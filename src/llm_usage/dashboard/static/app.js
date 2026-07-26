@@ -261,11 +261,21 @@ async function load(opts) {
 }
 
 function render(data) {
-  const totalCost = data.providers
-    .map(p => p.cost_usd)
-    .filter(v => v != null)
-    .reduce((a, b) => a + b, 0);
-  const hasCost = data.providers.some(p => p.cost_usd != null);
+  const billed = data.billed_cost_usd;
+  const estimated = data.estimated_cost_usd;
+  const hasCost = billed != null || estimated != null;
+  let costValue = '—';
+  let costSub = 'where known';
+  if (billed != null && estimated != null) {
+    costValue = fmtCost(billed) + ' + ' + fmtCost(estimated, true);
+    costSub = 'billed + estimated';
+  } else if (estimated != null) {
+    costValue = fmtCost(estimated, true);
+    costSub = 'estimated (list price)';
+  } else if (billed != null) {
+    costValue = fmtCost(billed);
+    costSub = 'billed';
+  }
   const totalTok = data.providers.reduce(
     (a, p) => a + (p.input_tokens||0) + (p.output_tokens||0)
       + (p.cache_read_tokens||0) + (p.cache_write_tokens||0), 0
@@ -273,12 +283,27 @@ function render(data) {
   const totalReq = data.providers.reduce((a, p) => a + (p.requests||0), 0);
   const active = data.providers.filter(p => p.source !== 'unavailable').length;
 
+  const anyEstimated = data.has_estimated_cost
+    || data.providers.some(p => p.meta && p.meta.estimated);
+  const pricesAsOf = data.prices_as_of ? esc(data.prices_as_of) : null;
   $('summary').innerHTML = `
-    <div class="card"><div class="label">Combined cost</div><div class="value">${hasCost ? fmtCost(totalCost) : '—'}</div><div class="sub">where known</div></div>
+    <div class="card"><div class="label">Combined cost</div><div class="value">${hasCost ? costValue : '—'}</div><div class="sub">${costSub}</div></div>
     <div class="card"><div class="label">Total tokens</div><div class="value">${fmtTok(totalTok)}</div><div class="sub">${fmtNum(totalTok)} raw</div></div>
     <div class="card"><div class="label">Requests</div><div class="value">${fmtNum(totalReq)}</div><div class="sub">across providers</div></div>
     <div class="card"><div class="label">Active sources</div><div class="value">${active}/${data.providers.length}</div><div class="sub">configured or local</div></div>
   `;
+  const foot = $('estimate-footnote');
+  if (foot) {
+    if (anyEstimated) {
+      foot.hidden = false;
+      foot.textContent = pricesAsOf
+        ? `~ = estimated from public list prices (as of ${pricesAsOf}) — not an invoice.`
+        : '~ = estimated from public list prices — not an invoice.';
+    } else {
+      foot.hidden = true;
+      foot.textContent = '';
+    }
+  }
 
   $('providers').innerHTML = data.providers.map(p => {
     const est = p.meta && p.meta.estimated;
