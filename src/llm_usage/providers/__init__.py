@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 
 from llm_usage.config import Settings
@@ -26,6 +27,10 @@ from llm_usage.serialize import report_to_dict
 # callers share one collection instead.
 DEFAULT_SNAPSHOT_TTL_S = 90.0
 
+# Collectors are independent HTTP/log work; wall-clock ≈ slowest, not sum.
+# 7 = claude, codex, openai, xai, cursor, gemini, openrouter (quota_only skips openai).
+_COLLECT_WORKERS = 7
+
 
 def collect_all(
     settings: Settings,
@@ -43,29 +48,64 @@ def collect_all(
     end = date.today()
     start = end - timedelta(days=max(window - 1, 0))
 
-    claude = collect_claude(settings, start, end, quota_only=quota_only)
-    codex = collect_codex(settings, start, end, quota_only=quota_only)
-    if quota_only:
-        # Platform API org usage is heavy and not shown as a menu bar % —
-        # Codex live quota alone is enough for the OpenAI family row.
-        openai = ProviderReport(
-            provider=ProviderId.OPENAI,
-            display_name="OpenAI",
-            source=SourceKind.UNAVAILABLE,
-            period_start=start,
-            period_end=end,
-        )
-    else:
-        openai = collect_openai(settings, start, end)
-    openai_family = _merge_openai_family(codex, openai)
+    if not quota_only:
+        # Drop logscan cache entries for rotated/deleted session files so
+        # ~/.config/llm-usage/cache/logscan/ doesn't grow without bound.
+        try:
+            from llm_usage.logcache import prune_missing_sources
 
+            prune_missing_sources()
+        except Exception:  # noqa: BLE001
+            pass
+
+    with ThreadPoolExecutor(max_workers=_COLLECT_WORKERS) as pool:
+        fut_claude = pool.submit(
+            collect_claude, settings, start, end, quota_only=quota_only
+        )
+        fut_codex = pool.submit(collect_codex, settings, start, end, quota_only=quota_only)
+        fut_openai = (
+            None
+            if quota_only
+            else pool.submit(collect_openai, settings, start, end)
+        )
+        fut_xai = pool.submit(collect_xai, settings, start, end, quota_only=quota_only)
+        fut_cursor = pool.submit(
+            collect_cursor, settings, start, end, quota_only=quota_only
+        )
+        fut_gemini = pool.submit(
+            collect_gemini, settings, start, end, quota_only=quota_only
+        )
+        fut_openrouter = pool.submit(
+            collect_openrouter, settings, start, end, quota_only=quota_only
+        )
+
+        claude = fut_claude.result()
+        codex = fut_codex.result()
+        if fut_openai is None:
+            # Platform API org usage is heavy and not shown as a menu bar % —
+            # Codex live quota alone is enough for the OpenAI family row.
+            openai = ProviderReport(
+                provider=ProviderId.OPENAI,
+                display_name="OpenAI",
+                source=SourceKind.UNAVAILABLE,
+                period_start=start,
+                period_end=end,
+            )
+        else:
+            openai = fut_openai.result()
+        xai = fut_xai.result()
+        cursor = fut_cursor.result()
+        gemini = fut_gemini.result()
+        openrouter = fut_openrouter.result()
+
+    openai_family = _merge_openai_family(codex, openai)
     reports: list[ProviderReport] = [
         claude,
         openai_family,
-        collect_xai(settings, start, end, quota_only=quota_only),
-        collect_cursor(settings, start, end, quota_only=quota_only),
-        collect_gemini(settings, start, end, quota_only=quota_only),
-        collect_openrouter(settings, start, end, quota_only=quota_only),
+        xai,
+        cursor,
+        gemini,
+        openrouter,
     ]
 
     return AggregateReport(period_start=start, period_end=end, providers=reports)

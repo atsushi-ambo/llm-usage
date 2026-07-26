@@ -108,7 +108,7 @@ These are **subscription quotas**, not dollar invoices:
 - **Codex Free**: shows token totals from local sessions + live `% of window used` and `plan_type=free`.
 - **Grok Build / X Premium**: shows inference token totals from Grok Build logs + weekly `creditUsagePercent` (e.g. 46% of this week’s included quota).
 
-Costs marked **estimated** (`~`) come from local token counts × public list prices — not invoices.
+Costs marked **estimated** (`~`) come from local token counts × public list prices — not invoices. The CLI and dashboard footnote the pricing-table snapshot date (`PRICES_AS_OF` in `pricing.py`).
 
 ---
 
@@ -124,6 +124,8 @@ llm-usage status             # which sources are configured
 llm-usage history -w 8       # weekly trend table + sparkline per provider
 llm-usage export -o out.json
 llm-usage dashboard --port 8765
+llm-usage check --format json   # cron: exit 1 if any quota ≥ --fail-at
+llm-usage doctor --format json  # live health of every configured source
 ```
 
 ---

@@ -25,7 +25,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=9.1.1", "ruff>=0.15.22"]
+dev = ["pytest>=9.1.1", "ruff>=0.15.22", "pyright>=1.1.400"]
 
 [project.scripts]
 llm-usage = "llm_usage.cli:app"
@@ -40,6 +40,23 @@ include = ["src/llm_usage", "README.md", "pyproject.toml", "tests"]
 line-length = 100
 target-version = "py311"
 
+[tool.ruff.lint]
+# Classic default rule set. Ruff 0.16+ enables a much wider built-in set
+# (pyupgrade, bugbear, bandit, datetime, isort, …) that floods this codebase;
+# expand deliberately rather than inherit a surprise major-version flip.
+select = ["E4", "E7", "E9", "F"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.pyright]
+include = ["src"]
+exclude = [
+  # Heavy AppKit/pyobjc surface; symbols only resolve on macOS with stubs.
+  "src/llm_usage/menubar.py",
+]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
+reportMissingImports = true
+reportMissingTypeStubs = false

@@ -26,15 +26,27 @@ def cache_dir() -> Path:
     return d
 
 
-def atomic_write_json(path: Path, data: dict[str, Any]) -> None:
+def atomic_write_json(
+    path: Path,
+    data: dict[str, Any],
+    *,
+    indent: int | None = 2,
+) -> None:
     """Write JSON with 0600 perms from creation — no window where the file
     briefly exists at the process' default umask before we chmod it.
     `tempfile.mkstemp` creates its file with mode 0600 already; we just
-    write into it and rename it into place."""
+    write into it and rename it into place.
+
+    indent=2 (default) for small human-readable quota snapshots;
+    indent=None for compact logscan payloads (roughly half the bytes).
+    """
     fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, indent=2)
+            if indent is None:
+                json.dump(data, fh, separators=(",", ":"))
+            else:
+                json.dump(data, fh, indent=indent)
         os.replace(tmp_name, path)
     except OSError:
         try:

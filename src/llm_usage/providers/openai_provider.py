@@ -43,16 +43,22 @@ def collect_openai(settings: Settings, start: date, end: date) -> ProviderReport
         "User-Agent": "llm-usage/0.1.0",
     }
 
+    # Page size must match the requested window (start/end), not settings.days
+    # alone — callers often pass a different window (e.g. doctor uses 7 days).
+    window_days = max((end - start).days + 1, 1)
+
     try:
         with httpx.Client(timeout=30.0) as client:
-            usage = _fetch_completions_usage(client, headers, start_ts, days=settings.days)
+            usage = _fetch_completions_usage(
+                client, headers, start_ts, days=window_days
+            )
             # Apply usage before touching costs: a cost-endpoint failure
             # (rate limit, missing scope, transient 5xx) shouldn't discard
             # usage data we already successfully fetched.
             _apply_usage(report, usage)
             report.source = SourceKind.API
             try:
-                costs = _fetch_costs(client, headers, start_ts, days=settings.days)
+                costs = _fetch_costs(client, headers, start_ts, days=window_days)
                 if costs is not None:
                     report.cost_usd = costs
             except httpx.HTTPStatusError as cost_exc:

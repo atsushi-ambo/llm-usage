@@ -872,9 +872,9 @@ def run_menubar() -> None:
             return
         state["updating"] = True
         try:
-            # Collect in a short-lived child process so httpx/pydantic/log
-            # trees are freed when it exits — the menubar UI process only
-            # keeps a slim AggregateReport between polls.
+            # Collect on a background thread (quota_only + slim_report) so
+            # the rumps UI stays responsive; results land via pending + the
+            # main-thread timer (_apply_pending_update).
             report = _collect_menubar_report(
                 days=MENUBAR_DAYS,
                 ttl_s=MENUBAR_SNAPSHOT_TTL_S,

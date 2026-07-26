@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from llm_usage.models import AggregateReport, ProviderReport
+from llm_usage.pricing import PRICES_AS_OF
 
 # Keys in ProviderReport.meta that hold raw upstream payloads (full OAuth
 # usage bodies, billing snapshots, API-key listings, etc). Useful for
@@ -38,6 +39,13 @@ def report_to_dict(report: AggregateReport, *, include_raw_meta: bool = False) -
             if isinstance(meta, dict):
                 for key in RAW_META_KEYS:
                     meta.pop(key, None)
+    # List-price snapshot date for ~ estimate footnotes (CLI / dashboard).
+    data["prices_as_of"] = PRICES_AS_OF
+    # Properties aren't in model_dump — surface cost splits for consumers.
+    data["total_cost_usd"] = report.total_cost_usd
+    data["billed_cost_usd"] = report.billed_cost_usd
+    data["estimated_cost_usd"] = report.estimated_cost_usd
+    data["has_estimated_cost"] = report.has_estimated_cost
     return data
 
 
