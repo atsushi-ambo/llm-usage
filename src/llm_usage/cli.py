@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import date
 from enum import Enum
 from pathlib import Path
@@ -12,16 +13,35 @@ from rich import box
 from rich.console import Console
 from rich.markup import escape as rich_escape
 from rich.panel import Panel
+from rich.prompt import Confirm
 from rich.table import Table
 from rich.text import Text
 
 from llm_usage import __version__
-from llm_usage.config import load_settings
+from llm_usage.config import (
+    get_active_profile,
+    get_profile_env_file,
+    list_profiles,
+    load_settings,
+    set_active_profile,
+)
 from llm_usage.history import daily_totals, sparkline, week_over_week_pct, weekly_buckets
 from llm_usage.models import AggregateReport, ProviderReport, SourceKind
 from llm_usage.providers import collect_all_cached
 from llm_usage.quota import quota_windows
+from llm_usage.scheduler import (
+    ScheduleFrequency,
+    ScheduledReport,
+    calculate_next_run,
+    delete_schedule,
+    list_schedules,
+    load_schedule,
+    run_scheduled_report,
+    save_schedule,
+)
 from llm_usage.serialize import report_to_dict
+from llm_usage.validation import format_validation_errors, validate_settings
+from llm_usage.wizard import run_setup_wizard
 
 app = typer.Typer(
     name="llm-usage",
@@ -148,10 +168,226 @@ def menubar_cmd() -> None:
     from llm_usage.menubar import run_menubar
 
     console.print(
-        "[cyan]Starting menu bar…[/cyan] Look for [bold]C## · G## · X##[/bold] "
+        "[cyan]Starting menu bar…[/cyan] Look for [bold]C## · G## · O##[/bold] "
         "near the clock. Click it for per-app usage."
     )
     run_menubar()
+
+
+@app.command("setup")
+def setup_cmd(
+    profile: Optional[str] = typer.Option(
+        None, "--profile", help="Write into a named profile (.env.<name>)"
+    ),
+) -> None:
+    """Run the interactive setup wizard for first-time configuration."""
+    run_setup_wizard(profile=profile)
+
+
+@app.command("validate")
+def validate_cmd() -> None:
+    """Validate configuration and show any errors or warnings."""
+    settings = load_settings()
+    errors = validate_settings(settings)
+    console.print(format_validation_errors(errors))
+    if any(e.severity == "error" for e in errors):
+        raise typer.Exit(1)
+
+
+@app.command("profile")
+def profile_cmd(
+    action: str = typer.Argument(..., help="Action: list, create, switch, delete, clear"),
+    name: Optional[str] = typer.Argument(None, help="Profile name"),
+) -> None:
+    """Manage configuration profiles (work/personal configs)."""
+    if action == "list":
+        profiles = list_profiles()
+        active = get_active_profile()
+        if profiles:
+            console.print("[bold]Available profiles:[/bold]")
+            for profile in profiles:
+                mark = " [cyan](active)[/cyan]" if profile == active else ""
+                console.print(f"  • {profile}{mark}")
+        else:
+            console.print(
+                "[dim]No profiles found. Create one with "
+                "'llm-usage profile create <name>'[/dim]"
+            )
+        if active and active not in profiles:
+            console.print(f"[yellow]Active profile '{active}' has no .env file yet[/yellow]")
+        elif not active:
+            console.print("[dim]Active: default (~/.config/llm-usage/.env)[/dim]")
+    elif action == "create":
+        if not name:
+            console.print("[red]Error: Profile name required[/red]")
+            raise typer.Exit(1)
+        try:
+            env_file = get_profile_env_file(name)
+        except ValueError as e:
+            console.print(f"[red]{e}[/red]")
+            raise typer.Exit(1)
+        if env_file.exists():
+            console.print(f"[yellow]Profile '{name}' already exists[/yellow]")
+            raise typer.Exit(1)
+        env_file.parent.mkdir(parents=True, exist_ok=True)
+        env_file.touch()
+        os.chmod(env_file, 0o600)
+        console.print(f"[green]Created profile '{name}' at {env_file}[/green]")
+        console.print(
+            f"[dim]Edit it or run: llm-usage setup --profile {name}[/dim]"
+        )
+    elif action == "switch":
+        if not name:
+            console.print("[red]Error: Profile name required[/red]")
+            raise typer.Exit(1)
+        try:
+            env_file = get_profile_env_file(name)
+        except ValueError as e:
+            console.print(f"[red]{e}[/red]")
+            raise typer.Exit(1)
+        if not env_file.exists():
+            console.print(f"[red]Profile '{name}' does not exist[/red]")
+            raise typer.Exit(1)
+        set_active_profile(name)
+        console.print(f"[green]Switched to profile '{name}'[/green]")
+        console.print(
+            f"[dim]Persisted in ~/.config/llm-usage/active_profile "
+            f"(override with LLM_USAGE_PROFILE={name})[/dim]"
+        )
+    elif action == "clear":
+        set_active_profile(None)
+        console.print("[green]Cleared active profile — using default .env[/green]")
+    elif action == "delete":
+        if not name:
+            console.print("[red]Error: Profile name required[/red]")
+            raise typer.Exit(1)
+        try:
+            env_file = get_profile_env_file(name)
+        except ValueError as e:
+            console.print(f"[red]{e}[/red]")
+            raise typer.Exit(1)
+        if not env_file.exists():
+            console.print(f"[red]Profile '{name}' does not exist[/red]")
+            raise typer.Exit(1)
+        if Confirm.ask(f"Delete profile '{name}'?"):
+            env_file.unlink()
+            if get_active_profile() == name:
+                set_active_profile(None)
+            console.print(f"[green]Deleted profile '{name}'[/green]")
+    else:
+        console.print(f"[red]Unknown action: {action}[/red]")
+        console.print("Valid actions: list, create, switch, clear, delete")
+        raise typer.Exit(1)
+
+
+@app.command("schedule")
+def schedule_cmd(
+    action: str = typer.Argument(..., help="Action: list, create, run, delete"),
+    name: Optional[str] = typer.Argument(None, help="Schedule name"),
+    frequency: Optional[str] = typer.Option(
+        None, "--frequency", "-f", help="Frequency: daily, weekly, monthly"
+    ),
+    days: int = typer.Option(30, "--days", "-d", help="Lookback period in days"),
+    format: str = typer.Option(
+        "csv", "--format", help="Export format: csv, json, txt"
+    ),
+) -> None:
+    """Manage scheduled automated reports (exports under cache/schedules/exports)."""
+    if action == "list":
+        schedules = list_schedules()
+        if schedules:
+            table = Table(title="Scheduled Reports", box=box.ROUNDED)
+            table.add_column("Name", style="bold")
+            table.add_column("Frequency")
+            table.add_column("Days")
+            table.add_column("Format")
+            table.add_column("Status")
+            table.add_column("Next Run")
+            for schedule in schedules:
+                status = (
+                    "[green]enabled[/green]"
+                    if schedule.enabled
+                    else "[red]disabled[/red]"
+                )
+                next_run = (
+                    schedule.next_run.strftime("%Y-%m-%d %H:%M")
+                    if schedule.next_run
+                    else "—"
+                )
+                table.add_row(
+                    schedule.name,
+                    schedule.frequency.value,
+                    str(schedule.days),
+                    schedule.export_format,
+                    status,
+                    next_run,
+                )
+            console.print(table)
+        else:
+            console.print(
+                "[dim]No scheduled reports. Create one with "
+                "'llm-usage schedule create <name> --frequency daily'[/dim]"
+            )
+    elif action == "create":
+        if not name:
+            console.print("[red]Error: Schedule name required[/red]")
+            raise typer.Exit(1)
+        if not frequency:
+            console.print(
+                "[red]Error: --frequency required (daily, weekly, monthly)[/red]"
+            )
+            raise typer.Exit(1)
+        try:
+            freq = ScheduleFrequency(frequency.lower())
+            schedule = ScheduledReport(
+                name=name,
+                frequency=freq,
+                days=days,
+                export_format=format,
+            )
+        except ValueError as e:
+            console.print(f"[red]{e}[/red]")
+            raise typer.Exit(1)
+        schedule.next_run = calculate_next_run(freq)
+        save_schedule(schedule)
+        console.print(f"[green]Created schedule '{name}'[/green]")
+        console.print(
+            f"[dim]Next run: {schedule.next_run.strftime('%Y-%m-%d %H:%M:%S')}[/dim]"
+        )
+        console.print(
+            "[dim]Run due jobs with: llm-usage schedule run <name> "
+            "(or cron that call).[/dim]"
+        )
+    elif action == "run":
+        if not name:
+            console.print("[red]Error: Schedule name required[/red]")
+            raise typer.Exit(1)
+        schedule = load_schedule(name)
+        if not schedule:
+            console.print(f"[red]Schedule '{name}' not found[/red]")
+            raise typer.Exit(1)
+        console.print(f"[cyan]Running scheduled report '{name}'…[/cyan]")
+        with console.status("Collecting usage…"):
+            run_scheduled_report(schedule)
+        schedule = load_schedule(name)
+        console.print("[green]Report generated and exported[/green]")
+        if schedule and schedule.next_run:
+            console.print(
+                f"[dim]Next run: "
+                f"{schedule.next_run.strftime('%Y-%m-%d %H:%M:%S')}[/dim]"
+            )
+    elif action == "delete":
+        if not name:
+            console.print("[red]Error: Schedule name required[/red]")
+            raise typer.Exit(1)
+        if delete_schedule(name):
+            console.print(f"[green]Deleted schedule '{name}'[/green]")
+        else:
+            console.print(f"[red]Schedule '{name}' not found[/red]")
+    else:
+        console.print(f"[red]Unknown action: {action}[/red]")
+        console.print("Valid actions: list, create, run, delete")
+        raise typer.Exit(1)
 
 
 @app.command("status")
@@ -237,6 +473,26 @@ def status_cmd() -> None:
             "OpenRouter",
             "API key",
             "ready" if settings.openrouter_api_key else "—",
+        ),
+        (
+            "Cohere",
+            "API key",
+            "ready" if settings.cohere_api_key else "—",
+        ),
+        (
+            "Mistral",
+            "API key",
+            "ready" if settings.mistral_api_key else "—",
+        ),
+        (
+            "Replicate",
+            "API key",
+            "ready" if settings.replicate_api_key else "—",
+        ),
+        (
+            "Hugging Face",
+            "API key",
+            "ready" if settings.huggingface_api_key else "—",
         ),
     ]
     for provider, source, status in rows:
@@ -554,9 +810,21 @@ def _show(
     provider: Optional[str],
     fresh: bool = False,
 ) -> None:
-    settings = load_settings()
-    with console.status("Collecting usage from providers…"):
-        report = collect_all_cached(settings, days=days, force_refresh=fresh)
+    try:
+        settings = load_settings()
+    except Exception as e:
+        console.print(f"[red]Error loading configuration:[/red] {str(e)}")
+        console.print("[dim]Run 'llm-usage setup' to configure the application.[/dim]")
+        raise typer.Exit(1)
+    
+    try:
+        with console.status("Collecting usage from providers…"):
+            report = collect_all_cached(settings, days=days, force_refresh=fresh)
+    except Exception as e:
+        console.print(f"[red]Error collecting usage data:[/red] {str(e)}")
+        console.print("[dim]Try running 'llm-usage doctor' to diagnose provider issues.[/dim]")
+        console.print("[dim]For more details, set LLM_USAGE_DEBUG=1 or LLM_USAGE_VERBOSE=1.[/dim]")
+        raise typer.Exit(1)
 
     if provider:
         want = provider.lower().strip()
@@ -567,6 +835,7 @@ def _show(
         ]
         if not report.providers:
             console.print(f"[red]No provider matching[/red] {provider!r}")
+            console.print("[dim]Available providers: claude, openai, codex, grok, cursor, gemini, openrouter, cohere, mistral, replicate, huggingface[/dim]")
             raise typer.Exit(1)
 
     if fmt == OutputFormat.json:

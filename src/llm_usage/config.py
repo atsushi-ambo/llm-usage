@@ -14,6 +14,65 @@ def _default_config_dir() -> Path:
 
 
 _GLOBAL_ENV_FILE = Path.home() / ".config" / "llm-usage" / ".env"
+_ACTIVE_PROFILE_FILE = Path.home() / ".config" / "llm-usage" / "active_profile"
+
+
+def get_profile_env_file(profile: str | None = None) -> Path:
+    """Get the env file path for a specific profile (or the default .env)."""
+    if profile:
+        # Prevent path traversal via profile name.
+        safe = "".join(c for c in profile if c.isalnum() or c in ("-", "_", "."))
+        if not safe or safe != profile:
+            raise ValueError(
+                "Profile name must be alphanumeric with optional - _ ."
+            )
+        return _default_config_dir() / f".env.{safe}"
+    return _GLOBAL_ENV_FILE
+
+
+def list_profiles() -> list[str]:
+    """List available configuration profiles (from .env.<name> files)."""
+    config_dir = _default_config_dir()
+    if not config_dir.exists():
+        return []
+    profiles: list[str] = []
+    for env_file in config_dir.glob(".env.*"):
+        if env_file.is_file():
+            profiles.append(env_file.name.removeprefix(".env."))
+    return sorted(profiles)
+
+
+def get_active_profile() -> str | None:
+    """Return active profile name from env or active_profile file."""
+    env_profile = os.environ.get("LLM_USAGE_PROFILE", "").strip()
+    if env_profile:
+        return env_profile
+    try:
+        if _ACTIVE_PROFILE_FILE.is_file():
+            name = _ACTIVE_PROFILE_FILE.read_text(encoding="utf-8").strip()
+            return name or None
+    except OSError:
+        pass
+    return None
+
+
+def set_active_profile(profile: str | None) -> None:
+    """Persist active profile (None clears to default .env)."""
+    config_dir = _default_config_dir()
+    config_dir.mkdir(parents=True, exist_ok=True)
+    if not profile:
+        try:
+            _ACTIVE_PROFILE_FILE.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return
+    # Validate by resolving path.
+    get_profile_env_file(profile)
+    _ACTIVE_PROFILE_FILE.write_text(profile + "\n", encoding="utf-8")
+    try:
+        os.chmod(_ACTIVE_PROFILE_FILE, 0o600)
+    except OSError:
+        pass
 
 
 class Settings(BaseSettings):
@@ -28,6 +87,9 @@ class Settings(BaseSettings):
         env_file=_GLOBAL_ENV_FILE,
         env_file_encoding="utf-8",
         extra="ignore",
+        # Allow both field names (budget_limit) and env aliases (LLM_USAGE_BUDGET_LIMIT)
+        # so tests and programmatic Settings(...) construction work.
+        populate_by_name=True,
     )
 
     # Anthropic
@@ -53,6 +115,26 @@ class Settings(BaseSettings):
 
     # OpenRouter
     openrouter_api_key: str | None = Field(default=None, alias="OPENROUTER_API_KEY")
+
+    # Optional extra providers (usage APIs mostly unavailable — config-only)
+    cohere_api_key: str | None = Field(default=None, alias="COHERE_API_KEY")
+    mistral_api_key: str | None = Field(default=None, alias="MISTRAL_API_KEY")
+    replicate_api_key: str | None = Field(default=None, alias="REPLICATE_API_KEY")
+    huggingface_api_key: str | None = Field(default=None, alias="HUGGINGFACE_API_KEY")
+
+    # Budget
+    budget_limit: float = Field(default=100.0, alias="LLM_USAGE_BUDGET_LIMIT")
+    budget_alert_threshold: float = Field(
+        default=0.9, alias="LLM_USAGE_BUDGET_ALERT_THRESHOLD"
+    )
+
+    # Dashboard auth cookie / HTTPS hints
+    dashboard_token_ttl: int = Field(default=3600, alias="LLM_USAGE_TOKEN_TTL")
+    require_https: bool = Field(default=False, alias="LLM_USAGE_REQUIRE_HTTPS")
+
+    # Debug
+    debug_mode: bool = Field(default=False, alias="LLM_USAGE_DEBUG")
+    verbose_logging: bool = Field(default=False, alias="LLM_USAGE_VERBOSE")
 
     # App
     days: int = Field(default=30, alias="LLM_USAGE_DAYS")
@@ -82,8 +164,17 @@ class Settings(BaseSettings):
     )
 
 
-def load_settings() -> Settings:
+def load_settings(profile: str | None = None) -> Settings:
+    """Load settings from the default or named profile env file."""
+    resolved_profile = profile if profile is not None else get_active_profile()
+    base_env_file = (
+        get_profile_env_file(resolved_profile)
+        if resolved_profile
+        else _GLOBAL_ENV_FILE
+    )
     extra_env_file = os.environ.get("LLM_USAGE_ENV_FILE")
     if extra_env_file:
-        return Settings(_env_file=(_GLOBAL_ENV_FILE, extra_env_file))  # type: ignore[call-arg]
-    return Settings()
+        return Settings(_env_file=(base_env_file, extra_env_file))  # type: ignore[call-arg]
+    # Always pass the resolved base so profile switch is honored even when
+    # the default model_config env_file points at the global .env.
+    return Settings(_env_file=base_env_file)  # type: ignore[call-arg]

@@ -21,6 +21,10 @@ class ProviderId(str, Enum):
     CURSOR = "cursor"
     GEMINI = "gemini"
     OPENROUTER = "openrouter"
+    COHERE = "cohere"
+    MISTRAL = "mistral"
+    REPLICATE = "replicate"
+    HUGGINGFACE = "huggingface"
     LOCAL = "local"
 
 

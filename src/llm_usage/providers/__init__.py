@@ -14,6 +14,11 @@ from llm_usage.providers.gemini import collect_gemini
 from llm_usage.providers.openai_provider import collect_openai
 from llm_usage.providers.openrouter import collect_openrouter
 from llm_usage.providers.xai import collect_xai
+from llm_usage.providers.cohere import collect as collect_cohere
+from llm_usage.providers.mistral import collect as collect_mistral
+from llm_usage.providers.replicate import collect as collect_replicate
+from llm_usage.providers.huggingface import collect as collect_huggingface
+from llm_usage.providers.plugin import get_custom_providers
 from llm_usage.quota import read_json_cache, write_json_cache
 from llm_usage.serialize import report_to_dict
 
@@ -28,8 +33,8 @@ from llm_usage.serialize import report_to_dict
 DEFAULT_SNAPSHOT_TTL_S = 90.0
 
 # Collectors are independent HTTP/log work; wall-clock ≈ slowest, not sum.
-# 7 = claude, codex, openai, xai, cursor, gemini, openrouter (quota_only skips openai).
-_COLLECT_WORKERS = 7
+# 11 = claude, codex, openai, xai, cursor, gemini, openrouter, cohere, mistral, replicate, huggingface (quota_only skips openai).
+_COLLECT_WORKERS = 11
 
 
 def collect_all(
@@ -78,6 +83,10 @@ def collect_all(
         fut_openrouter = pool.submit(
             collect_openrouter, settings, start, end, quota_only=quota_only
         )
+        fut_cohere = pool.submit(collect_cohere, settings)
+        fut_mistral = pool.submit(collect_mistral, settings)
+        fut_replicate = pool.submit(collect_replicate, settings)
+        fut_huggingface = pool.submit(collect_huggingface, settings)
 
         claude = fut_claude.result()
         codex = fut_codex.result()
@@ -97,6 +106,10 @@ def collect_all(
         cursor = fut_cursor.result()
         gemini = fut_gemini.result()
         openrouter = fut_openrouter.result()
+        cohere = fut_cohere.result()
+        mistral = fut_mistral.result()
+        replicate = fut_replicate.result()
+        huggingface = fut_huggingface.result()
 
     openai_family = _merge_openai_family(codex, openai)
     reports: list[ProviderReport] = [
@@ -106,7 +119,17 @@ def collect_all(
         cursor,
         gemini,
         openrouter,
+        cohere,
+        mistral,
+        replicate,
+        huggingface,
     ]
+
+    # Optional user plugins from ~/.config/llm-usage/plugins/
+    try:
+        reports.extend(get_custom_providers(settings))
+    except Exception:  # noqa: BLE001
+        pass
 
     return AggregateReport(period_start=start, period_end=end, providers=reports)
 

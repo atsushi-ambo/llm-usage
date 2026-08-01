@@ -61,9 +61,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
     "/" — every path (other than the harmless health check) is gated.
     """
 
-    def __init__(self, app, token: str) -> None:
+    def __init__(self, app, token: str, settings: Settings) -> None:
         super().__init__(app)
         self._token = token
+        self._settings = settings
 
     async def dispatch(self, request: Request, call_next):
         if request.url.path in _OPEN_PATHS:
@@ -72,7 +73,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
         supplied = request.query_params.get("token")
         cookie_token = request.cookies.get(COOKIE_NAME)
         supplied_ok = bool(supplied) and secrets.compare_digest(supplied, self._token)
-        cookie_ok = bool(cookie_token) and secrets.compare_digest(cookie_token, self._token)
+        cookie_ok = bool(cookie_token) and secrets.compare_digest(
+            cookie_token, self._token
+        )
 
         if not (supplied_ok or cookie_ok):
             return JSONResponse(
@@ -85,23 +88,22 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         response = await call_next(request)
         if supplied_ok and supplied != cookie_token:
-            response.set_cookie(
-                COOKIE_NAME,
-                self._token,
-                httponly=True,
-                samesite="strict",
-                path="/",
-            )
+            cookie_attrs: dict = {
+                "httponly": True,
+                "samesite": "strict",
+                "path": "/",
+                "max_age": max(60, int(self._settings.dashboard_token_ttl)),
+            }
+            if self._settings.require_https:
+                cookie_attrs["secure"] = True
+            response.set_cookie(COOKIE_NAME, self._token, **cookie_attrs)
         return response
 
 
 def _security_headers(response: Response) -> None:
+    # script-src is 'self' only (no 'unsafe-inline', no CDN): all JS lives in
+    # /static/app.js. Charts are pure SVG drawn by that file.
     response.headers["Content-Security-Policy"] = (
-        # script-src is 'self' only (no 'unsafe-inline'): all JS lives in
-        # /static/app.js, so even if an interpolated value slipped past the
-        # esc() helper, an injected inline <script> still would not execute.
-        # style-src keeps 'unsafe-inline' for the page's <style> block and the
-        # JS-built style="width:NN%" bars (numeric, clamped in clampPct()).
         "default-src 'self'; style-src 'self' 'unsafe-inline'; "
         "script-src 'self'; img-src 'self' data:; "
         "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'"
@@ -126,7 +128,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # Last-added middleware runs outermost (closest to the client), so the
     # Host check happens before the token check.
-    app.add_middleware(AuthMiddleware, token=token)
+    app.add_middleware(AuthMiddleware, token=token, settings=settings)
     app.add_middleware(LoopbackHostMiddleware)
 
     if STATIC_DIR.exists():
@@ -153,7 +155,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # provider API. ?refresh=1 (the dashboard's "Refresh" button) forces
         # a fresh collection.
         report = collect_all_cached(app.state.settings, days, force_refresh=refresh)
-        return JSONResponse(report_to_dict(report))
+        payload = report_to_dict(report)
+        payload["budget_limit"] = app.state.settings.budget_limit
+        payload["budget_alert_threshold"] = app.state.settings.budget_alert_threshold
+        return JSONResponse(payload)
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> HTMLResponse:

@@ -32,15 +32,31 @@ DEFAULT_FOCUS = "grok"
 # Brand rgb is the *light-menu* baseline; dark mode brightens ~18%.
 PROVIDER_STYLE: dict[str, dict] = {
     "claude": {"letter": "C", "short": "Claude", "rgb": (206, 145, 120)},  # #ce9178
-    "codex": {"letter": "X", "short": "Codex", "rgb": (106, 153, 85)},  # #6a9955
+    "codex": {"letter": "O", "short": "Codex", "rgb": (106, 153, 85)},  # #6a9955
     "openai": {"letter": "O", "short": "OpenAI", "rgb": (78, 201, 176)},  # #4ec9b0
     "grok": {"letter": "G", "short": "Grok", "rgb": (197, 134, 192)},  # #c586c0
     "cursor": {"letter": "Cu", "short": "Cursor", "rgb": (86, 156, 214)},  # #569cd6
     "gemini": {"letter": "Ge", "short": "Gemini", "rgb": (204, 167, 0)},  # #cca700
     "openrouter": {"letter": "Or", "short": "OpenRouter", "rgb": (156, 220, 254)},  # #9cdcfe
+    "cohere": {"letter": "Co", "short": "Cohere", "rgb": (0, 180, 216)},  # #00b4d8
+    "mistral": {"letter": "Mi", "short": "Mistral", "rgb": (255, 107, 53)},  # #ff6b35
+    "replicate": {"letter": "Re", "short": "Replicate", "rgb": (99, 102, 241)},  # #6366f1
+    "huggingface": {"letter": "Hf", "short": "HuggingFace", "rgb": (255, 217, 61)},  # #ffd93d
 }
 
-FOCUS_ORDER = ["grok", "codex", "claude", "cursor", "gemini", "openrouter", "openai"]
+FOCUS_ORDER = [
+    "grok",
+    "codex",
+    "claude",
+    "cursor",
+    "gemini",
+    "openrouter",
+    "openai",
+    "cohere",
+    "mistral",
+    "replicate",
+    "huggingface",
+]
 
 # Charts heat ramp (light-menu baseline)
 _RGB_OK = (137, 209, 133)  # #89d185

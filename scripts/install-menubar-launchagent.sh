@@ -46,5 +46,5 @@ EOF
 launchctl unload "${PLIST}" 2>/dev/null || true
 launchctl load "${PLIST}"
 echo "Installed and started: ${PLIST}"
-echo "Menu bar title looks like: C41 · G63 · X29"
+echo "Menu bar title looks like: C41 · G63 · O29"
 echo "Unload with: launchctl unload ${PLIST}"

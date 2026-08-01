@@ -50,7 +50,7 @@
     }
     h1 span { color: var(--accent); }
     .controls { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; }
-    select, button {
+    select, button, input[type="date"] {
       background: var(--panel);
       color: var(--text);
       border: 1px solid var(--border);
@@ -58,12 +58,57 @@
       padding: .45rem .75rem;
       font-size: .9rem;
     }
+    input[type="date"] {
+      color-scheme: dark;
+    }
     button {
       cursor: pointer;
       background: linear-gradient(180deg, #2a6fdb, #1f5bbd);
       border-color: #3b7de8;
     }
     button:hover { filter: brightness(1.08); }
+    .filter-controls {
+      display: flex;
+      gap: .5rem;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-bottom: 1rem;
+    }
+    .filter-controls label {
+      color: var(--muted);
+      font-size: .85rem;
+    }
+    .chart-container {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 1rem;
+      margin-bottom: 1rem;
+      height: 300px;
+    }
+    .cost-breakdown {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    .forecast-card {
+      background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(139, 92, 246, 0.1));
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 1rem;
+    }
+    .budget-alert {
+      background: rgba(255, 107, 107, 0.1);
+      border: 1px solid var(--red);
+      border-radius: 14px;
+      padding: 1rem;
+      margin-bottom: 1rem;
+    }
+    .budget-alert.warning {
+      background: rgba(245, 197, 66, 0.1);
+      border-color: var(--yellow);
+    }
     main { padding: 1.5rem; max-width: 1200px; margin: 0 auto; }
     .section-title {
       color: var(--muted);
@@ -223,6 +268,20 @@
     .empty { color: var(--muted); text-align: center; padding: 3rem 1rem; }
     footer { text-align: center; color: var(--muted); font-size: .75rem; padding: 2rem 1rem; }
     #status { color: var(--muted); font-size: .8rem; }
+
+    .provider.cohere::before { background: #00b4d8; }
+    .provider.mistral::before { background: #ff6b35; }
+    .provider.replicate::before { background: #6366f1; }
+    .provider.huggingface::before { background: #ffd93d; }
+    .muted-note { color: var(--muted); margin: 0; font-size: .9rem; }
+    .cost-row { margin-bottom: .75rem; }
+    .cost-row-head {
+      display: flex; justify-content: space-between; gap: .5rem;
+      font-size: .85rem; margin-bottom: .3rem;
+    }
+    .usage-svg { width: 100%; height: 220px; display: block; }
+    .chart-caption { color: var(--muted); font-size: .75rem; margin-top: .5rem; }
+    .chart-container { height: auto; min-height: 120px; }
     a { color: var(--accent); }
   </style>
 </head>
@@ -236,14 +295,38 @@
         <option value="14">Last 14 days</option>
         <option value="30" selected>Last 30 days</option>
         <option value="90">Last 90 days</option>
+        <option value="custom">Custom range</option>
       </select>
+      <input type="date" id="date-start" hidden>
+      <input type="date" id="date-end" hidden>
       <button id="refresh">Refresh</button>
+      <button id="export-csv">Export CSV</button>
+      <button id="export-pdf">Export PDF</button>
     </div>
   </header>
   <main>
+    <div id="budget-alerts"></div>
     <p class="section-title">Overview</p>
     <section class="summary" id="summary"></section>
     <p class="estimate-footnote" id="estimate-footnote" hidden></p>
+    <p class="section-title">Cost Breakdown</p>
+    <section class="cost-breakdown" id="cost-breakdown"></section>
+    <p class="section-title">Usage Trends</p>
+    <div class="chart-container" id="usage-chart"></div>
+    <p class="section-title">Forecast</p>
+    <section class="forecast-card" id="forecast"></section>
+    <div class="filter-controls">
+      <label>Filter by provider:</label>
+      <select id="provider-filter">
+        <option value="all">All providers</option>
+      </select>
+      <label>Sort by:</label>
+      <select id="sort-by">
+        <option value="cost">Cost</option>
+        <option value="tokens">Tokens</option>
+        <option value="requests">Requests</option>
+      </select>
+    </div>
     <p class="section-title">Providers</p>
     <section class="providers" id="providers"></section>
   </main>

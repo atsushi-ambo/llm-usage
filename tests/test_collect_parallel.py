@@ -52,15 +52,22 @@ def test_collect_all_runs_collectors_concurrently():
         patch("llm_usage.providers.collect_cursor", side_effect=slow_collect),
         patch("llm_usage.providers.collect_gemini", side_effect=slow_collect),
         patch("llm_usage.providers.collect_openrouter", side_effect=slow_collect),
+        patch("llm_usage.providers.collect_cohere", side_effect=slow_collect),
+        patch("llm_usage.providers.collect_mistral", side_effect=slow_collect),
+        patch("llm_usage.providers.collect_replicate", side_effect=slow_collect),
+        patch("llm_usage.providers.collect_huggingface", side_effect=slow_collect),
+        patch("llm_usage.providers.get_custom_providers", return_value=[]),
         patch("llm_usage.logcache.prune_missing_sources", return_value=0),
     ):
         report = collect_all(settings, days=7)
     elapsed = time.monotonic() - t0
 
-    assert len(report.providers) == 6
-    # All seven collectors should start near-simultaneously (one worker each).
-    assert len(started) == 7  # claude,codex,openai,xai,cursor,gemini,openrouter
+    # 10 cards: claude + merged openai/codex + xai + cursor + gemini + openrouter
+    # + cohere + mistral + replicate + huggingface
+    assert len(report.providers) == 10
+    # 11 collectors start near-simultaneously (openai + codex both run; merge after).
+    assert len(started) == 11
     span = max(started) - min(started)
     assert span < 0.1, f"starts were staggered over {span:.3f}s — looks sequential"
-    # Sequential would be ~7 × 0.12 ≈ 0.84s; concurrent ≈ 0.12s + overhead.
+    # Sequential would be ~11 × 0.12 ≈ 1.3s; concurrent ≈ 0.12s + overhead.
     assert elapsed < 0.55, f"collect_all took {elapsed:.3f}s; expected concurrent ~0.12s"

@@ -40,7 +40,7 @@ llm-usage menubar     # macOS: quota % in the menu bar (click for all AIs)
 
 ### macOS menu bar (like Kanary)
 
-Shows compact quotas near the clock, e.g. `C41 · G63 · X29` (Claude / Grok / Codex).
+Shows compact quotas near the clock, e.g. `C41 · G63 · O29` (Claude / Grok / Codex).
 
 ```bash
 llm-usage menubar
