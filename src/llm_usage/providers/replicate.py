@@ -17,7 +17,7 @@ def collect(settings: Settings) -> ProviderReport:
             provider=ProviderId.REPLICATE,
             display_name="Replicate",
             source=SourceKind.UNAVAILABLE,
-            errors=["REPLICATE_API_KEY not set"],
+            notes=["Set REPLICATE_API_KEY to enable this provider."],
             meta={"console_url": "https://replicate.com/account/billing"},
         )
 

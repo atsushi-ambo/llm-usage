@@ -17,7 +17,7 @@ def collect(settings: Settings) -> ProviderReport:
             provider=ProviderId.MISTRAL,
             display_name="Mistral AI",
             source=SourceKind.UNAVAILABLE,
-            errors=["MISTRAL_API_KEY not set"],
+            notes=["Set MISTRAL_API_KEY to enable this provider."],
             meta={"console_url": "https://console.mistral.ai/"},
         )
 

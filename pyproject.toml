@@ -53,7 +53,9 @@ pythonpath = ["src"]
 [tool.pyright]
 include = ["src"]
 exclude = [
-  # Heavy AppKit/pyobjc surface; symbols only resolve on macOS with stubs.
+  # AppKit/pyobjc glue only; symbols resolve solely on macOS with stubs.
+  # The menu bar's actual logic (quota selection, palette, bar geometry)
+  # lives in menubar_core.py precisely so it stays inside the type check.
   "src/llm_usage/menubar.py",
 ]
 pythonVersion = "3.11"

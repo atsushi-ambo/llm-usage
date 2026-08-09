@@ -190,8 +190,11 @@ def get_cache_size() -> dict[str, int]:
 
 def format_size(bytes_size: int) -> str:
     """Format a byte size into human-readable format."""
+    # Accumulate in a float local: dividing the int parameter in place makes
+    # its type disagree with the signature (pyright reportAssignmentType).
+    size = float(bytes_size)
     for unit in ["B", "KB", "MB", "GB"]:
-        if bytes_size < 1024.0:
-            return f"{bytes_size:.2f} {unit}"
-        bytes_size /= 1024.0
-    return f"{bytes_size:.2f} TB"
+        if size < 1024.0:
+            return f"{size:.2f} {unit}"
+        size /= 1024.0
+    return f"{size:.2f} TB"
