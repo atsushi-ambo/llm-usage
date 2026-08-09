@@ -1,8 +1,13 @@
-"""macOS menu bar — one colorful usage bar + switchable provider."""
+"""macOS menu bar — one colorful usage bar + switchable provider.
+
+Only the AppKit/rumps glue lives here (NSColor, NSImage, timers, threads),
+which is why pyright skips this file. The decision logic it draws from —
+quota selection, palette resolution, bar geometry — is AppKit-free and
+lives in `menubar_core`, where it is type-checked and unit-tested.
+"""
 
 from __future__ import annotations
 
-import json
 import subprocess
 import tempfile
 import threading
@@ -12,8 +17,31 @@ from datetime import datetime
 from pathlib import Path
 
 from llm_usage.config import load_settings
-from llm_usage.models import AggregateReport, ProviderId, ProviderReport
-from llm_usage.quota import atomic_write_json, quota_windows
+from llm_usage.menubar_core import (
+    DEFAULT_FOCUS,
+    FOCUS_ORDER,
+    NOTIFY_THRESHOLDS,
+    PREFS_PATH,
+    PROVIDER_STYLE,
+    _RGB_CRIT,
+    _RGB_EMPTY_LIGHT,
+    _RGB_HOT,
+    _RGB_WARN,
+    bar_color_for_pct,
+    bar_segments,
+    brighten,
+    build_palette,
+    display_quota,
+    find_provider,
+    lerp_rgb,
+    load_prefs,
+    pct_rgb,
+    quota_crossings,
+    quota_of,
+    save_prefs,
+    unicode_bar,
+)
+from llm_usage.models import AggregateReport
 
 # Poll gently — quota barely moves minute-to-minute. Less frequent = less RAM/CPU.
 REFRESH_SECONDS = 300
@@ -21,144 +49,32 @@ REFRESH_SECONDS = 300
 MENUBAR_DAYS = 1
 # Reuse the light quota snapshot between polls.
 MENUBAR_SNAPSHOT_TTL_S = 240.0
-PREFS_PATH = Path.home() / ".config" / "llm-usage" / "menubar.json"
-NOTIFY_THRESHOLDS = (70, 90)
 
-# Default: Grok in the menu bar (user can switch)
-DEFAULT_FOCUS = "grok"
+# Private aliases keep this module's existing call sites (and tests that
+# import from `llm_usage.menubar`) working after the split.
+_load_prefs = load_prefs
+_save_prefs = save_prefs
+_quota_crossings = quota_crossings
+_display_quota = display_quota
+_quota_of = quota_of
+_find_provider = find_provider
+_unicode_bar = unicode_bar
+_brighten = brighten
+_pct_rgb = pct_rgb
+_bar_color_for_pct = bar_color_for_pct
+_lerp_rgb = lerp_rgb
+_bar_segments = bar_segments
 
-# VS Code Dark+-inspired palette — muted so bars stay legible on both
-# light and dark NSMenus (background is always system-drawn).
-# Brand rgb is the *light-menu* baseline; dark mode brightens ~18%.
-PROVIDER_STYLE: dict[str, dict] = {
-    "claude": {"letter": "C", "short": "Claude", "rgb": (206, 145, 120)},  # #ce9178
-    "codex": {"letter": "O", "short": "Codex", "rgb": (106, 153, 85)},  # #6a9955
-    "openai": {"letter": "O", "short": "OpenAI", "rgb": (78, 201, 176)},  # #4ec9b0
-    "grok": {"letter": "G", "short": "Grok", "rgb": (197, 134, 192)},  # #c586c0
-    "cursor": {"letter": "Cu", "short": "Cursor", "rgb": (86, 156, 214)},  # #569cd6
-    "gemini": {"letter": "Ge", "short": "Gemini", "rgb": (204, 167, 0)},  # #cca700
-    "openrouter": {"letter": "Or", "short": "OpenRouter", "rgb": (156, 220, 254)},  # #9cdcfe
-    "cohere": {"letter": "Co", "short": "Cohere", "rgb": (0, 180, 216)},  # #00b4d8
-    "mistral": {"letter": "Mi", "short": "Mistral", "rgb": (255, 107, 53)},  # #ff6b35
-    "replicate": {"letter": "Re", "short": "Replicate", "rgb": (99, 102, 241)},  # #6366f1
-    "huggingface": {"letter": "Hf", "short": "HuggingFace", "rgb": (255, 217, 61)},  # #ffd93d
-}
-
-FOCUS_ORDER = [
-    "grok",
-    "codex",
-    "claude",
-    "cursor",
-    "gemini",
-    "openrouter",
-    "openai",
-    "cohere",
-    "mistral",
-    "replicate",
-    "huggingface",
+__all__ = [
+    "DEFAULT_FOCUS",
+    "FOCUS_ORDER",
+    "MENUBAR_DAYS",
+    "NOTIFY_THRESHOLDS",
+    "PREFS_PATH",
+    "PROVIDER_STYLE",
+    "REFRESH_SECONDS",
+    "run_menubar",
 ]
-
-# Charts heat ramp (light-menu baseline)
-_RGB_OK = (137, 209, 133)  # #89d185
-_RGB_WARN = (204, 167, 0)  # #cca700  ≥50%
-_RGB_HOT = (209, 134, 22)  # #d18616  ≥70%
-_RGB_CRIT = (229, 20, 0)  # #e51400   ≥90%
-_RGB_EMPTY_LIGHT = (200, 200, 205)
-_RGB_EMPTY_DARK = (60, 60, 60)
-
-
-def _load_prefs() -> dict:
-    if PREFS_PATH.exists():
-        try:
-            data = json.loads(PREFS_PATH.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                return data
-        except (OSError, json.JSONDecodeError):
-            pass
-    return {"focus": DEFAULT_FOCUS}
-
-
-def _save_prefs(prefs: dict) -> None:
-    PREFS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        atomic_write_json(PREFS_PATH, prefs)
-    except OSError:
-        pass
-
-
-def _quota_crossings(
-    report: AggregateReport, notified: dict[tuple[str, str], int]
-) -> list[tuple[str, str, float, int]]:
-    """(display_name, window_label, pct, threshold) for every quota window
-    that just crossed a new NOTIFY_THRESHOLDS level, updating `notified` in
-    place so the same crossing isn't returned again until the window drops
-    back below the lowest threshold (e.g. it reset)."""
-    crossings: list[tuple[str, str, float, int]] = []
-    for p in report.providers:
-        for label, pct in quota_windows(p):
-            key = (p.provider.value, label)
-            crossed = max((t for t in NOTIFY_THRESHOLDS if pct >= t), default=None)
-            if crossed is not None and crossed != notified.get(key):
-                crossings.append((p.display_name, label, pct, crossed))
-                notified[key] = crossed
-            elif crossed is None and key in notified:
-                del notified[key]
-    return crossings
-
-
-def _display_quota(p: ProviderReport) -> dict | None:
-    """Quota dict to use for the provider's headline %/reset in the menu bar.
-
-    Claude's primary (via claude_quota_from_oauth) is already the 5-hour
-    window. As a belt-and-suspenders fallback, if a report still has a
-    top-level 7-day headline but includes a five_hour window, prefer that
-    for the clock-adjacent glance — 5-hour is what blocks you next.
-    """
-    q = (p.meta or {}).get("quota") or {}
-    if q.get("used_percent") is None and not q.get("windows"):
-        return None
-    if p.provider == ProviderId.CLAUDE:
-        windows = q.get("windows") or []
-        five_hour = next((w for w in windows if w.get("key") == "five_hour"), None)
-        if five_hour and five_hour.get("used_percent") is not None:
-            return {
-                "used_percent": five_hour.get("used_percent"),
-                "resets_at": five_hour.get("resets_at"),
-                "label": five_hour.get("label") or "5-hour",
-                "plan": q.get("plan"),
-                "windows": windows,
-            }
-    return q if q.get("used_percent") is not None else None
-
-
-def _quota_of(p: ProviderReport) -> float | None:
-    q = _display_quota(p)
-    pct = q.get("used_percent") if q else None
-    if pct is None:
-        return None
-    try:
-        return max(0.0, min(100.0, float(pct)))
-    except (TypeError, ValueError):
-        return None
-
-
-def _find_provider(report: AggregateReport, pid: str) -> ProviderReport | None:
-    for p in report.providers:
-        if p.provider.value == pid:
-            return p
-    # codex card may be the merged openai/codex entry
-    if pid == "openai":
-        for p in report.providers:
-            if p.provider.value in ("openai", "codex"):
-                return p
-    return None
-
-
-def _unicode_bar(pct: float, width: int = 10) -> str:
-    """Plain fallback bar (tests / non-AppKit)."""
-    filled = int(round((pct / 100.0) * width))
-    filled = max(0, min(width, filled))
-    return "█" * filled + "░" * (width - filled)
 
 
 def _is_dark_appearance() -> bool:
@@ -176,101 +92,13 @@ def _is_dark_appearance() -> bool:
         return False
 
 
-def _brighten(rgb: tuple[int, int, int], factor: float = 1.18) -> tuple[int, int, int]:
-    """Lift colors ~15–20% for dark menus so they don't sink into the chrome."""
-    return (
-        min(255, int(rgb[0] * factor)),
-        min(255, int(rgb[1] * factor)),
-        min(255, int(rgb[2] * factor)),
-    )
-
-
 def _appearance_palette() -> dict:
-    """Resolve brand + heat colors for the current light/dark menu."""
-    dark = _is_dark_appearance()
-    brands = {k: v["rgb"] for k, v in PROVIDER_STYLE.items()}
-    ok, warn, hot, crit = _RGB_OK, _RGB_WARN, _RGB_HOT, _RGB_CRIT
-    empty = _RGB_EMPTY_DARK if dark else _RGB_EMPTY_LIGHT
-    if dark:
-        brands = {k: _brighten(v) for k, v in brands.items()}
-        ok, warn, hot, crit = (
-            _brighten(ok),
-            _brighten(warn),
-            _brighten(hot),
-            _brighten(crit),
-        )
-    return {
-        "dark": dark,
-        "brands": brands,
-        "ok": ok,
-        "warn": warn,
-        "hot": hot,
-        "crit": crit,
-        "empty": empty,
-    }
+    """Resolve brand + heat colors for the current light/dark menu.
 
-
-def _pct_rgb(
-    pct: float,
-    brand: tuple[int, int, int],
-    *,
-    warn: tuple[int, int, int] = _RGB_WARN,
-    hot: tuple[int, int, int] = _RGB_HOT,
-    crit: tuple[int, int, int] = _RGB_CRIT,
-) -> tuple[int, int, int]:
-    """Brand while healthy; charts heat ramp at ≥50 / ≥70 / ≥90."""
-    if pct >= 90:
-        return crit
-    if pct >= 70:
-        return hot
-    if pct >= 50:
-        return warn
-    return brand
-
-
-def _bar_color_for_pct(
-    pct: float,
-    base_rgb: tuple[int, int, int],
-    *,
-    warn: tuple[int, int, int] = _RGB_WARN,
-    hot: tuple[int, int, int] = _RGB_HOT,
-    crit: tuple[int, int, int] = _RGB_CRIT,
-) -> tuple[int, int, int]:
-    return _pct_rgb(pct, base_rgb, warn=warn, hot=hot, crit=crit)
-
-
-def _lerp_rgb(
-    a: tuple[int, int, int], b: tuple[int, int, int], t: float
-) -> tuple[int, int, int]:
-    t = max(0.0, min(1.0, t))
-    return (
-        int(a[0] + (b[0] - a[0]) * t),
-        int(a[1] + (b[1] - a[1]) * t),
-        int(a[2] + (b[2] - a[2]) * t),
-    )
-
-
-def _bar_segments(
-    pct: float,
-    width: int,
-    brand: tuple[int, int, int],
-    *,
-    empty: tuple[int, int, int] = _RGB_EMPTY_LIGHT,
-    warn: tuple[int, int, int] = _RGB_WARN,
-    hot: tuple[int, int, int] = _RGB_HOT,
-    crit: tuple[int, int, int] = _RGB_CRIT,
-) -> list[tuple[str, tuple[int, int, int]]]:
-    """Solid brand/heat fill; empty track matches light or dark menu."""
-    filled = int(round((pct / 100.0) * width))
-    filled = max(0, min(width, filled))
-    fill = _pct_rgb(pct, brand, warn=warn, hot=hot, crit=crit)
-    segs: list[tuple[str, tuple[int, int, int]]] = []
-    for i in range(width):
-        if i < filled:
-            segs.append(("█", fill))
-        else:
-            segs.append(("░", empty))
-    return segs
+    Appearance detection is the only AppKit-dependent step; the color math
+    itself lives in menubar_core.build_palette().
+    """
+    return dict(build_palette(_is_dark_appearance()))
 
 
 def _ns_color(rgb: tuple[int, int, int] | None, alpha: float = 1.0):

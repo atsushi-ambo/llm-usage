@@ -17,7 +17,7 @@ def collect(settings: Settings) -> ProviderReport:
             provider=ProviderId.HUGGINGFACE,
             display_name="Hugging Face",
             source=SourceKind.UNAVAILABLE,
-            errors=["HUGGINGFACE_API_KEY not set"],
+            notes=["Set HUGGINGFACE_API_KEY to enable this provider."],
             meta={"console_url": "https://huggingface.co/settings/billing"},
         )
 

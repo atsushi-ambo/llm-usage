@@ -23,3 +23,25 @@ llm-usage is a **local, single-user tool**. It:
 Reports about weakening any of the above — token leakage into logs, error
 messages, exports, or the API; dashboard auth bypass; DNS-rebinding — are
 in scope and appreciated.
+
+## Plugins run with full process privileges
+
+Custom provider plugins (`~/.config/llm-usage/plugins/*.py`) are **arbitrary
+Python executed in-process**. That process reads live OAuth tokens and every
+configured API key, so a plugin is exactly as trusted as llm-usage itself —
+there is no sandbox. Install only plugins you have read and trust, the same
+way you would treat a shell profile.
+
+The loader enforces the "user-owned directory" assumption rather than taking
+it on faith. It refuses to execute a plugin when:
+
+- the file resolves outside the plugins directory (blocks path traversal and
+  symlinks that smuggle in code from elsewhere);
+- the plugins directory or the plugin file is writable by group or others;
+- either is owned by someone other than you or root.
+
+Skipped plugins surface as a visible error row rather than disappearing
+silently, so tampering is noticed instead of being mistaken for a plugin
+that simply stopped working. A way to bypass these checks — or to get code
+executed from outside the plugins directory — is a vulnerability worth
+reporting.

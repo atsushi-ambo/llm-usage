@@ -17,7 +17,7 @@ def collect(settings: Settings) -> ProviderReport:
             provider=ProviderId.COHERE,
             display_name="Cohere",
             source=SourceKind.UNAVAILABLE,
-            errors=["COHERE_API_KEY not set"],
+            notes=["Set COHERE_API_KEY to enable this provider."],
             meta={"console_url": "https://dashboard.cohere.com/"},
         )
 

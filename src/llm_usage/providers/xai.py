@@ -48,8 +48,13 @@ def collect_xai(
     live_billing: dict[str, Any] | None = None
     try:
         live_billing = _fetch_live_credits(settings.grok_home_dir)
+    except _GrokNotLoggedIn as exc:
+        # Not logged in is a setup state, not a failure: `doctor`/`check`
+        # exit non-zero on errors, and an unconfigured provider must not
+        # make an otherwise-healthy install look broken.
+        report.notes.append(str(exc))
     except Exception as exc:  # noqa: BLE001
-        report.errors.append(f"Live Grok billing: {exc}")
+        report.errors.append(f"Live Grok billing: {safe_error_str(exc)}")
 
     # 2) Local inference logs for token totals (skipped in quota_only / menubar)
     build: dict[str, Any] = {}
@@ -228,11 +233,17 @@ def _read_grok_auth_token(home: Path) -> str | None:
     return None
 
 
+class _GrokNotLoggedIn(RuntimeError):
+    """No Grok credentials on disk — a setup state, not a fetch failure."""
+
+
 def _fetch_live_credits(home: Path) -> dict[str, Any] | None:
     """Live weekly credits from cli-chat-proxy (same as Grok Build / settings)."""
     token = _read_grok_auth_token(home)
     if not token:
-        raise RuntimeError("No Grok auth token in ~/.grok/auth.json — run `grok login`")
+        raise _GrokNotLoggedIn(
+            "No Grok auth token in ~/.grok/auth.json — run `grok login` for live quota."
+        )
 
     headers = {
         "Authorization": f"Bearer {token}",
