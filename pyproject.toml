@@ -25,7 +25,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=9.1.1", "ruff>=0.15.22", "pyright>=1.1.411"]
+dev = ["pytest>=9.1.1", "ruff>=0.16.3", "pyright>=1.1.411"]
 
 [project.scripts]
 llm-usage = "llm_usage.cli:app"
