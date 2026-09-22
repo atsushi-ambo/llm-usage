@@ -140,5 +140,11 @@ def test_collect_all_cached_quota_uses_separate_cache_key(monkeypatch, tmp_path)
     collect_all_cached(_settings(), days=1, ttl_s=60, quota_only=False)
     # two different cache keys → two collects
     assert calls == [True, False]
-    assert (tmp_path / "report_snapshot_quota_1.json").exists()
-    assert (tmp_path / "report_snapshot_1.json").exists()
+    names = {p.name for p in tmp_path.glob("report_snapshot*.json")}
+    assert any(n.startswith("report_snapshot_quota_") and n.endswith("_1.json") for n in names)
+    assert any(
+        n.startswith("report_snapshot_")
+        and not n.startswith("report_snapshot_quota_")
+        and n.endswith("_1.json")
+        for n in names
+    )

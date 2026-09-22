@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from datetime import date
 from enum import Enum
 from pathlib import Path
@@ -152,7 +151,29 @@ def dashboard_cmd(
             border_style="cyan",
         )
     )
+    import logging
+    import re
+
     import uvicorn
+
+    # Uvicorn's default access log includes the full target, so the first
+    # hit on /?token=... would otherwise print the session secret.
+    _token_qs = re.compile(r"([?&]token=)[^&\s\"]+", re.I)
+
+    class _RedactTokenFilter(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            if isinstance(record.msg, str):
+                record.msg = _token_qs.sub(r"\1***", record.msg)
+            if record.args:
+                record.args = tuple(
+                    _token_qs.sub(r"\1***", a) if isinstance(a, str) else a
+                    for a in record.args
+                )
+            return True
+
+    _redact = _RedactTokenFilter()
+    for _name in ("uvicorn.access", "uvicorn.error", "uvicorn"):
+        logging.getLogger(_name).addFilter(_redact)
 
     uvicorn.run(
         dashboard_app,
@@ -230,8 +251,9 @@ def profile_cmd(
             console.print(f"[yellow]Profile '{name}' already exists[/yellow]")
             raise typer.Exit(1)
         env_file.parent.mkdir(parents=True, exist_ok=True)
-        env_file.touch()
-        os.chmod(env_file, 0o600)
+        from llm_usage.config import atomic_write_text
+
+        atomic_write_text(env_file, "")
         console.print(f"[green]Created profile '{name}' at {env_file}[/green]")
         console.print(
             f"[dim]Edit it or run: llm-usage setup --profile {name}[/dim]"
@@ -703,17 +725,15 @@ def export_cmd(
 ) -> None:
     """Write a JSON usage report to disk."""
     import json
-    import os
 
     settings = load_settings()
     with console.status("Collecting usage…"):
         report = collect_all_cached(settings, days=days, force_refresh=fresh)
     data = report_to_dict(report, include_raw_meta=include_raw)
-    output.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    try:
-        os.chmod(output, 0o600)
-    except OSError:
-        pass
+    from llm_usage.config import atomic_write_text
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(output, json.dumps(data, indent=2) + "\n")
     console.print(f"[green]Wrote[/green] {output.resolve()}")
 
 
@@ -848,6 +868,9 @@ def _show(
 
 
 def _print_table(report: AggregateReport) -> None:
+    from llm_usage.burnrate import project_from_quota
+    from llm_usage.menubar_core import display_quota
+
     header = (
         f"[bold]LLM Usage[/bold]  "
         f"{report.period_start.isoformat()} → {report.period_end.isoformat()}"
@@ -857,6 +880,8 @@ def _print_table(report: AggregateReport) -> None:
     table = Table(box=box.SIMPLE_HEAVY, show_footer=True)
     table.add_column("Provider", style="bold", footer="TOTAL")
     table.add_column("Source", footer="")
+    table.add_column("Quota", justify="right", footer="")
+    table.add_column("Pace", footer="")
     table.add_column("Requests", justify="right", footer=f"{report.total_requests:,}")
     table.add_column("Input tok", justify="right", footer="")
     table.add_column("Output tok", justify="right", footer="")
@@ -866,9 +891,32 @@ def _print_table(report: AggregateReport) -> None:
     table.add_column("Notes")
 
     for p in report.providers:
+        q = display_quota(p) or {}
+        pct = q.get("used_percent")
+        if pct is not None:
+            try:
+                quota_cell = f"{float(pct):.0f}%"
+            except (TypeError, ValueError):
+                quota_cell = "—"
+        else:
+            quota_cell = "—"
+        burn = project_from_quota(q) if q else None
+        if burn is None:
+            pace_cell = ""
+        elif burn.hits_before_reset is True:
+            pace_cell = f"[red]{burn.hits_label}[/red]"
+        elif burn.hits_label == "ok till reset":
+            pace_cell = f"[green]{burn.hits_label}[/green]"
+        elif burn.hits_label == "exhausted":
+            pace_cell = "[red]exhausted[/red]"
+        else:
+            pace_cell = burn.hits_label
+
         table.add_row(
             p.display_name,
             _source_label(p.source),
+            quota_cell,
+            pace_cell,
             f"{p.requests:,}" if p.requests else "—",
             f"{p.input_tokens:,}" if p.input_tokens else "—",
             f"{p.output_tokens:,}" if p.output_tokens else "—",
@@ -918,6 +966,12 @@ def _print_table(report: AggregateReport) -> None:
             if is_quota or (p.total_tokens == 0 and p.cost_usd is None):
                 style = "cyan" if is_quota else "dim"
                 console.print(f"[{style}]· {p.display_name}: {note}[/{style}]")
+        # Burn-rate summary when we can project (and it's not already obvious)
+        q = display_quota(p) or {}
+        burn = project_from_quota(q) if q else None
+        if burn is not None and burn.summary and burn.hits_label not in ("idle",):
+            style = "red" if burn.hits_before_reset is True else "cyan"
+            console.print(f"[{style}]· {p.display_name}: {burn.summary}[/{style}]")
 
     if report.total_cost_usd is not None:
         console.print(

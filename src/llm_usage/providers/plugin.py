@@ -189,12 +189,14 @@ def get_custom_providers(settings: Settings) -> list[ProviderReport]:
                 raise TypeError("plugin.collect() must return ProviderReport")
             reports.append(report)
         except Exception as e:  # noqa: BLE001
+            from llm_usage.providers.base import safe_error_str
+
             reports.append(
                 ProviderReport(
                     provider=ProviderId.LOCAL,
                     display_name=str(display),
                     source=SourceKind.UNAVAILABLE,
-                    errors=[f"Plugin error: {e}"],
+                    errors=[f"Plugin error: {safe_error_str(e)}"],
                 )
             )
     return reports

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+import threading
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import date, timedelta
 
 from llm_usage.config import Settings
@@ -33,8 +34,14 @@ from llm_usage.serialize import report_to_dict
 DEFAULT_SNAPSHOT_TTL_S = 90.0
 
 # Collectors are independent HTTP/log work; wall-clock ≈ slowest, not sum.
-# 11 = claude, codex, openai, xai, cursor, gemini, openrouter, cohere, mistral, replicate, huggingface (quota_only skips openai).
-_COLLECT_WORKERS = 11
+# 12 = 11 built-ins + custom plugins (quota_only skips openai).
+_COLLECT_WORKERS = 12
+
+# In-process single-flight so two overlapping collect_all_cached() calls
+# (dashboard double-click, two tabs, menubar+CLI in the same process) share
+# one live collection instead of stampeding provider APIs.
+_inflight_lock = threading.Lock()
+_inflight: dict[str, Future[AggregateReport]] = {}
 
 
 def collect_all(
@@ -63,6 +70,7 @@ def collect_all(
         except Exception:  # noqa: BLE001
             pass
 
+    plugin_reports: list[ProviderReport] = []
     with ThreadPoolExecutor(max_workers=_COLLECT_WORKERS) as pool:
         fut_claude = pool.submit(
             collect_claude, settings, start, end, quota_only=quota_only
@@ -87,6 +95,7 @@ def collect_all(
         fut_mistral = pool.submit(collect_mistral, settings)
         fut_replicate = pool.submit(collect_replicate, settings)
         fut_huggingface = pool.submit(collect_huggingface, settings)
+        fut_plugins = pool.submit(get_custom_providers, settings)
 
         claude = fut_claude.result()
         codex = fut_codex.result()
@@ -110,6 +119,10 @@ def collect_all(
         mistral = fut_mistral.result()
         replicate = fut_replicate.result()
         huggingface = fut_huggingface.result()
+        try:
+            plugin_reports = fut_plugins.result()
+        except Exception:  # noqa: BLE001
+            plugin_reports = []
 
     openai_family = _merge_openai_family(codex, openai)
     reports: list[ProviderReport] = [
@@ -125,11 +138,7 @@ def collect_all(
         huggingface,
     ]
 
-    # Optional user plugins from ~/.config/llm-usage/plugins/
-    try:
-        reports.extend(get_custom_providers(settings))
-    except Exception:  # noqa: BLE001
-        pass
+    reports.extend(plugin_reports)
 
     return AggregateReport(period_start=start, period_end=end, providers=reports)
 
@@ -147,14 +156,19 @@ def collect_all_cached(
     and menubar invocations that land within the same window share one
     collection instead of each independently re-hitting every provider API.
 
-    Keyed by the resolved --days window and quota_only flag so the menubar's
-    light snapshot never collides with a full CLI/dashboard report.
+    Keyed by active profile, --days window, and quota_only so the menubar's
+    light snapshot never collides with a full CLI/dashboard report, and two
+    named profiles with different API keys don't serve each other's data.
     """
     window = days if days is not None else settings.days
+    from llm_usage.config import get_active_profile
+
+    profile = get_active_profile() or "default"
+    safe_profile = "".join(c for c in profile if c.isalnum() or c in "-_.") or "default"
     cache_name = (
-        f"report_snapshot_quota_{window}.json"
+        f"report_snapshot_quota_{safe_profile}_{window}.json"
         if quota_only
-        else f"report_snapshot_{window}.json"
+        else f"report_snapshot_{safe_profile}_{window}.json"
     )
 
     if not force_refresh and ttl_s > 0:
@@ -165,12 +179,33 @@ def collect_all_cached(
             except Exception:  # noqa: BLE001
                 pass  # corrupt/incompatible cache entry — fall through
 
-    report = collect_all(settings, days=days, quota_only=quota_only)
-    if ttl_s > 0:
-        # Strip raw upstream payloads before disk — smaller cache, less RAM
-        # when reloading, and avoids parking OAuth bodies on disk.
-        write_json_cache(cache_name, report_to_dict(report, include_raw_meta=False))
-    return report
+    mine = False
+    with _inflight_lock:
+        existing = _inflight.get(cache_name)
+        if existing is None:
+            existing = Future()
+            _inflight[cache_name] = existing
+            mine = True
+        waiter: Future = existing
+
+    if not mine:
+        return waiter.result()
+
+    try:
+        report = collect_all(settings, days=days, quota_only=quota_only)
+        if ttl_s > 0:
+            # Strip raw upstream payloads before disk — smaller cache, less RAM
+            # when reloading, and avoids parking OAuth bodies on disk.
+            write_json_cache(cache_name, report_to_dict(report, include_raw_meta=False))
+        waiter.set_result(report)
+        return report
+    except Exception as exc:
+        waiter.set_exception(exc)
+        raise
+    finally:
+        with _inflight_lock:
+            if _inflight.get(cache_name) is waiter:
+                _inflight.pop(cache_name, None)
 
 
 def _merge_openai_family(codex: ProviderReport, openai: ProviderReport) -> ProviderReport:

@@ -166,11 +166,13 @@ def _parse_daily_usage(report: ProviderReport, body: dict[str, Any]) -> None:
         # Sum per-type request counts when the payload breaks them out;
         # only fall back to a single generic field when none are present
         # (summing both would double-count the same requests).
+        # Never treat totalLinesAdded / totalLinesDeleted as requests —
+        # those are IDE edit metrics, not model calls.
         type_keys = ("composerRequests", "chatRequests", "agentRequests", "cmdkUsages", "bugbotUsages")
         if any(k in row for k in type_keys):
             reqs = sum(safe_int(row.get(k)) for k in type_keys)
         else:
-            reqs = safe_int(row.get("requests") or row.get("totalAccepts"))
+            reqs = safe_int(row.get("requests") or row.get("totalAccepts") or 0)
 
         if day:
             daily.append(
@@ -211,6 +213,7 @@ def _fill_dashboard_session(
         "endDate": end.isoformat(),
     }
 
+    attempts: list[str] = []
     with httpx.Client(timeout=30.0, cookies=cookies, headers=headers) as client:
         # usage summary
         for path in (
@@ -220,18 +223,27 @@ def _fill_dashboard_session(
             "https://www.cursor.com/api/usage",
         ):
             try:
-                resp = client.get(path) if "usage" in path and "aggregated" not in path else client.post(path, json=payload)
+                resp = (
+                    client.get(path)
+                    if "usage" in path and "aggregated" not in path
+                    else client.post(path, json=payload)
+                )
                 if resp.status_code != 200:
+                    attempts.append(f"{path.split('//', 1)[-1]} → HTTP {resp.status_code}")
                     continue
                 body = resp.json()
                 report.meta["raw_dashboard"] = _summarize_dashboard(body)
+                report.meta["dashboard_endpoint"] = path
                 _apply_dashboard_body(report, body)
                 return
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
+                attempts.append(f"{path.split('//', 1)[-1]} → {safe_error_str(exc)}")
                 continue
 
+    detail = "; ".join(attempts[-4:]) if attempts else "no endpoints tried"
     raise RuntimeError(
-        "Could not load Cursor dashboard usage with the given session token"
+        "Could not load Cursor dashboard usage with the given session token "
+        f"({detail})"
     )
 
 

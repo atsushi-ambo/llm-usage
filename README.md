@@ -40,6 +40,14 @@ llm-usage menubar     # macOS: quota % in the menu bar (click for all AIs)
 
 ### macOS menu bar (like Kanary)
 
+The menu lists recently active providers only. A provider hides after 30 minutes
+without an observed increase in usage and returns on the next five-minute poll
+when usage increases. When all providers are idle, the menu bar item hides too;
+background polling continues. The first reading establishes a baseline and does
+not count as activity. Observations persist across restarts. Activity is inferred
+from reported quota/usage changes, so provider reporting delays also delay detection.
+
+
 Shows compact quotas near the clock, e.g. `C41 · G63 · O29` (Claude / Grok / Codex).
 
 ```bash

@@ -17,10 +17,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from pathlib import Path
 from typing import Any, Callable
 
 from llm_usage import quota
+
+# Full-tree prune walks every logscan entry; once an hour is enough because
+# session files don't rotate that fast, and collect_all() used to pay this
+# on every CLI/dashboard invocation.
+_PRUNE_MARKER = ".last_prune"
+_FULL_PRUNE_INTERVAL_S = 3600.0
 
 
 def _cache_file_for(namespace: str, path: Path) -> Path:
@@ -68,21 +75,43 @@ def scan_with_cache(namespace: str, path: Path, parse_fn: Callable[[Path], Any])
     return data
 
 
-def prune_missing_sources(namespace: str | None = None) -> int:
+def prune_missing_sources(
+    namespace: str | None = None,
+    *,
+    min_interval_s: float | None = None,
+) -> int:
     """Remove logscan cache entries whose source path no longer exists.
 
     Session files rotate/delete under ~/.claude, ~/.codex, etc.; without a
     sweep the SHA-1 keyed entries under cache/logscan/ stay forever.
     Returns the number of cache files removed.
+
+    The full-tree sweep (no namespace) is throttled to once an hour so
+    collect_all() doesn't re-walk the cache on every invocation. A
+    namespace-scoped prune (used by tests) always runs immediately.
     """
     root = quota.cache_dir() / "logscan"
     if namespace:
         root = root / namespace
+    interval = (
+        0.0
+        if min_interval_s is None and namespace
+        else (_FULL_PRUNE_INTERVAL_S if min_interval_s is None else min_interval_s)
+    )
+    marker = (root if namespace else quota.cache_dir() / "logscan") / _PRUNE_MARKER
+    if interval > 0:
+        try:
+            if time.time() - marker.stat().st_mtime < interval:
+                return 0
+        except OSError:
+            pass
     if not root.is_dir():
         return 0
 
     removed = 0
     for cache_path in root.rglob("*.json"):
+        if cache_path.name.startswith("."):
+            continue
         try:
             cached = json.loads(cache_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -112,4 +141,9 @@ def prune_missing_sources(namespace: str | None = None) -> int:
             removed += 1
         except OSError:
             pass
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(str(int(time.time())), encoding="utf-8")
+    except OSError:
+        pass
     return removed

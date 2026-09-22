@@ -3,10 +3,27 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def atomic_write_text(path: Path, text: str) -> None:
+    """Write `text` with 0600 perms from creation (no umask window)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp_name, path)
+    except OSError:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 def _default_config_dir() -> Path:
@@ -68,11 +85,7 @@ def set_active_profile(profile: str | None) -> None:
         return
     # Validate by resolving path.
     get_profile_env_file(profile)
-    _ACTIVE_PROFILE_FILE.write_text(profile + "\n", encoding="utf-8")
-    try:
-        os.chmod(_ACTIVE_PROFILE_FILE, 0o600)
-    except OSError:
-        pass
+    atomic_write_text(_ACTIVE_PROFILE_FILE, profile + "\n")
 
 
 class Settings(BaseSettings):
@@ -122,8 +135,9 @@ class Settings(BaseSettings):
     replicate_api_key: str | None = Field(default=None, alias="REPLICATE_API_KEY")
     huggingface_api_key: str | None = Field(default=None, alias="HUGGINGFACE_API_KEY")
 
-    # Budget
-    budget_limit: float = Field(default=100.0, alias="LLM_USAGE_BUDGET_LIMIT")
+    # Budget. 0 disables dashboard alerts — a non-zero default would fire
+    # on list-price estimates from local logs, which is a false alarm.
+    budget_limit: float = Field(default=0.0, alias="LLM_USAGE_BUDGET_LIMIT")
     budget_alert_threshold: float = Field(
         default=0.9, alias="LLM_USAGE_BUDGET_ALERT_THRESHOLD"
     )

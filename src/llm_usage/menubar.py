@@ -18,6 +18,7 @@ from pathlib import Path
 
 from llm_usage.config import load_settings
 from llm_usage.menubar_core import (
+    active_report,
     DEFAULT_FOCUS,
     FOCUS_ORDER,
     NOTIFY_THRESHOLDS,
@@ -31,6 +32,7 @@ from llm_usage.menubar_core import (
     bar_segments,
     brighten,
     build_palette,
+    burn_of,
     display_quota,
     find_provider,
     lerp_rgb,
@@ -39,6 +41,8 @@ from llm_usage.menubar_core import (
     quota_crossings,
     quota_of,
     save_prefs,
+    title_quota_chip,
+    title_quota_tooltip,
     unicode_bar,
 )
 from llm_usage.models import AggregateReport
@@ -57,6 +61,9 @@ _save_prefs = save_prefs
 _quota_crossings = quota_crossings
 _display_quota = display_quota
 _quota_of = quota_of
+_burn_of = burn_of
+_title_quota_chip = title_quota_chip
+_title_quota_tooltip = title_quota_tooltip
 _find_provider = find_provider
 _unicode_bar = unicode_bar
 _brighten = brighten
@@ -98,7 +105,27 @@ def _appearance_palette() -> dict:
     Appearance detection is the only AppKit-dependent step; the color math
     itself lives in menubar_core.build_palette().
     """
-    return dict(build_palette(_is_dark_appearance()))
+    from AppKit import NSColor
+
+    pal = dict(build_palette(_is_dark_appearance()))
+
+    def rgb(color):
+        color = color.colorUsingColorSpaceName_("NSCalibratedRGBColorSpace")
+        return tuple(
+            round(c * 255)
+            for c in (color.redComponent(), color.greenComponent(), color.blueComponent())
+        )
+
+    accent = rgb(NSColor.controlAccentColor())
+    pal["brands"] = {pid: accent for pid in PROVIDER_STYLE}
+    pal.update(
+        ok=accent,
+        warn=rgb(NSColor.systemOrangeColor()),
+        hot=rgb(NSColor.systemOrangeColor()),
+        crit=rgb(NSColor.systemRedColor()),
+        empty=pal["empty"],
+    )
+    return pal
 
 
 def _ns_color(rgb: tuple[int, int, int] | None, alpha: float = 1.0):
@@ -115,10 +142,11 @@ def _attributed_title(
     parts: list[tuple[str, tuple[int, int, int] | None]],
     *,
     size: float = 13.0,
+    menubar: bool = False,
 ):
-    """Build a multi-color NSAttributedString for an NSMenuItem title.
+    """Build a multi-color NSAttributedString.
 
-    rgb=None → system label color (chrome text). Only bars / % should pass colors.
+    rgb=None → system label color (chrome text).
     """
     try:
         from AppKit import (  # type: ignore
@@ -130,7 +158,7 @@ def _attributed_title(
     except ImportError:
         return None
 
-    font = NSFont.menuFontOfSize_(size)
+    font = NSFont.menuBarFontOfSize_(size) if menubar else NSFont.menuFontOfSize_(size)
     attr = NSMutableAttributedString.alloc().initWithString_("")
     for text, rgb in parts:
         if not text:
@@ -162,6 +190,45 @@ def _set_colored_title(
         pass
 
 
+def _set_status_item_title(
+    app_obj,
+    plain: str,
+    parts: list[tuple[str, tuple[int, int, int] | None]],
+) -> None:
+    """Color the clock-adjacent title; rumps' title setter is system-only."""
+    app_obj.title = plain
+    attr = _attributed_title(parts, size=13.0, menubar=True)
+    if attr is None:
+        return
+    try:
+        nsapp = getattr(app_obj, "_nsapp", None)
+        nsitem = getattr(nsapp, "nsstatusitem", None) if nsapp is not None else None
+        if nsitem is None:
+            return
+        button = nsitem.button() if hasattr(nsitem, "button") else None
+        if button is not None:
+            button.setAttributedTitle_(attr)
+        else:
+            nsitem.setAttributedTitle_(attr)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _set_status_tooltip(app_obj, text: str) -> None:
+    try:
+        nsapp = getattr(app_obj, "_nsapp", None)
+        nsitem = getattr(nsapp, "nsstatusitem", None) if nsapp is not None else None
+        if nsitem is None:
+            return
+        button = nsitem.button() if hasattr(nsitem, "button") else None
+        if button is not None:
+            button.setToolTip_(text)
+        else:
+            nsitem.setToolTip_(text)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _render_single_bar_icon(
     pct: float,
     rgb: tuple[int, int, int],
@@ -170,8 +237,11 @@ def _render_single_bar_icon(
     warn: tuple[int, int, int] = _RGB_WARN,
     hot: tuple[int, int, int] = _RGB_HOT,
     crit: tuple[int, int, int] = _RGB_CRIT,
+    filename: str = "status.png",
+    pt_w: int = 24,
+    pt_h: int = 8,
 ) -> Path | None:
-    """Rounded usage pill — muted fill, system-agnostic track."""
+    """Rounded usage pill for the status item and popup rows."""
     try:
         from AppKit import (  # type: ignore
             NSBezierPath,
@@ -188,7 +258,6 @@ def _render_single_bar_icon(
         return None
 
     scale = 2
-    pt_w, pt_h = 28, 13
     px_w, px_h = pt_w * scale, pt_h * scale
 
     rep = NSBitmapImageRep.alloc().initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel_(
@@ -220,33 +289,24 @@ def _render_single_bar_icon(
 
         er, eg, eb = empty[0] / 255.0, empty[1] / 255.0, empty[2] / 255.0
         NSColor.colorWithCalibratedRed_green_blue_alpha_(er, eg, eb, 1.0).set()
-        track = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+        NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
             NSMakeRect(pad, y, track_w, bar_h), radius, radius
-        )
-        track.fill()
+        ).fill()
 
         fill_rgb = _bar_color_for_pct(pct, rgb, warn=warn, hot=hot, crit=crit)
         r, g, b = fill_rgb[0] / 255.0, fill_rgb[1] / 255.0, fill_rgb[2] / 255.0
         if pct > 0:
             fill_w = max(bar_h * 0.95, track_w * (pct / 100.0))
             NSColor.colorWithCalibratedRed_green_blue_alpha_(r, g, b, 1.0).set()
-            fill = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+            NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
                 NSMakeRect(pad, y, min(fill_w, track_w), bar_h), radius, radius
-            )
-            fill.fill()
-            NSColor.colorWithCalibratedRed_green_blue_alpha_(1.0, 1.0, 1.0, 0.14).set()
-            hi = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
-                NSMakeRect(pad + 1, y + bar_h * 0.18, min(fill_w, track_w) - 2, bar_h * 0.28),
-                2,
-                2,
-            )
-            hi.fill()
+            ).fill()
     finally:
         img.unlockFocus()
 
     tdir = Path(tempfile.gettempdir()) / "llm-usage-menubar"
     tdir.mkdir(exist_ok=True)
-    out = tdir / "status.png"
+    out = tdir / filename
     try:
         tiff = img.TIFFRepresentation()
         if tiff is None:
@@ -314,8 +374,10 @@ def run_menubar() -> None:
     }
 
     app = rumps.App("llm-usage", title="…", quit_button=None)
-    # Follow system light/dark for the menu chrome (NSMenu draws the background).
-    # We only color bars + %; labels stay system default.
+    # Use native menu typography and semantic system colors.
+    activity = prefs.get("activity", {})
+    if not isinstance(activity, dict):
+        activity = {}
 
     # Keep strong refs so callbacks aren't GC'd
     callbacks: list = []
@@ -335,15 +397,15 @@ def run_menubar() -> None:
 
     def _apply_status(app_obj, report: AggregateReport, focus: str) -> None:
         p = _find_provider(report, focus)
-        # Prefer focus; if no quota, fall back to grok then first with quota
-        if p is None or _quota_of(p) is None:
-            for candidate in [focus, DEFAULT_FOCUS, "codex", "claude"]:
-                p = _find_provider(report, candidate)
-                if p is not None and _quota_of(p) is not None:
-                    focus = candidate
-                    break
-            else:
-                p = None
+        if p is None:
+            p = next(iter(report.providers), None)
+        if p is not None:
+            focus = p.provider.value
+        state["display_focus"] = focus if p else None
+        nsapp = getattr(app_obj, "_nsapp", None)
+        status_item = getattr(nsapp, "nsstatusitem", None)
+        if status_item is not None:
+            status_item.setVisible_(p is not None)
 
         if p is None:
             pct = None
@@ -358,20 +420,25 @@ def run_menubar() -> None:
         pid_key = focus if p else DEFAULT_FOCUS
         rgb = pal["brands"].get(pid_key, style["rgb"])
 
+        letter = style.get("letter") or "?"
         if pct is None:
             key = f"{focus}:none:{pal['dark']}"
             if state.get("status_key") != key:
                 state["status_key"] = key
-                app_obj.title = f" {style['letter']}"
+                # System color — NES brights are unreadable in the clock strip.
+                app_obj.title = f" {_title_quota_chip(p)}" if p else ""
+                _set_status_tooltip(app_obj, "")
                 try:
                     app_obj.icon = None
                 except Exception:
                     pass
             return
 
-        rounded = int(round(pct))
-        key = f"{focus}:{rounded}:{style['letter']}:{pal['dark']}"
-        app_obj.title = f" {style['letter']}{rounded}%"
+        chip = _title_quota_chip(p) if p is not None else f"{letter} {int(round(pct))}%"
+        key = f"{focus}:{chip}:{pal['dark']}:v3"
+        app_obj.title = f" {chip}"
+        if p is not None:
+            _set_status_tooltip(app_obj, _title_quota_tooltip(p))
         if state.get("status_key") == key:
             return
         state["status_key"] = key
@@ -383,6 +450,7 @@ def run_menubar() -> None:
             warn=pal["warn"],
             hot=pal["hot"],
             crit=pal["crit"],
+            filename="status.png",
         )
         if path and path.exists():
             try:
@@ -425,10 +493,7 @@ def run_menubar() -> None:
         if report is None:
             add_enabled("Loading…")  # plain system color
         else:
-            add_enabled(
-                f"Updated {datetime.now().strftime('%H:%M:%S')}  ·  "
-                f"{report.period_start} → {report.period_end}"
-            )
+            add_enabled(f"Updated {datetime.now().strftime('%H:%M')}")
             app.menu.add(None)
 
             # ── Per-provider: system labels, colored bar + % only ──
@@ -444,74 +509,43 @@ def run_menubar() -> None:
                     q = _display_quota(p) or {}
                     plan = q.get("plan") or ""
                     label = (q.get("label") or "").replace(" limit", "").strip()
-                    pct_rgb = _pct_rgb(
-                        pct, brand, warn=pal["warn"], hot=pal["hot"], crit=pal["crit"]
-                    )
-                    bar_segs = _bar_segments(
+                    burn = _burn_of(p)
+                    short = style.get("short", p.display_name)
+                    line = f"{short}    {pct:.0f}%"
+                    parts = [(f"{short}    ", None), (f"{pct:.0f}%", None)]
+
+                    item = add_enabled(line, parts=parts)
+                    bar_img = _render_single_bar_icon(
                         pct,
-                        10,
                         brand,
                         empty=pal["empty"],
                         warn=pal["warn"],
                         hot=pal["hot"],
                         crit=pal["crit"],
+                        filename=f"menu-{p.provider.value}.png",
+                        pt_w=30,
+                        pt_h=6,
                     )
-                    plain_bar = "".join(c for c, _ in bar_segs)
-
-                    line = f"{letter}  {p.display_name}  {plain_bar}  {pct:.0f}%"
-                    if label:
-                        line += f"  ·  {label}"
-                    if plan:
-                        line += f"  ·  {plan}"
-
-                    # None = system label color (chrome stays calm).
-                    parts: list[tuple[str, tuple[int, int, int] | None]] = [
-                        (f"{letter}  {p.display_name}  ", None),
-                        *bar_segs,
-                        (f"  {pct:.0f}%", pct_rgb),
-                    ]
-                    if label:
-                        parts.append((f"  ·  {label}", None))
-                    if plan:
-                        parts.append((f"  ·  {plan}", None))
-
-                    item = add_enabled(line, parts=parts)
+                    if bar_img and bar_img.exists():
+                        try:
+                            item.set_icon(str(bar_img), dimensions=(30, 6), template=False)
+                        except Exception:  # noqa: BLE001
+                            pass
 
                     for w in q.get("windows") or []:
                         if w.get("used_percent") is None:
                             continue
                         wp = float(w["used_percent"])
-                        w_segs = _bar_segments(
-                            wp,
-                            8,
-                            brand,
-                            empty=pal["empty"],
-                            warn=pal["warn"],
-                            hot=pal["hot"],
-                            crit=pal["crit"],
-                        )
-                        w_plain = "".join(c for c, _ in w_segs)
-                        w_label = str(w.get("label") or "window")
-                        w_line = f"    {w_label}  {w_plain}  {wp:.0f}%"
-                        w_parts: list[tuple[str, tuple[int, int, int] | None]] = [
-                            (f"    {w_label}  ", None),
-                            *w_segs,
-                            (
-                                f"  {wp:.0f}%",
-                                _pct_rgb(
-                                    wp,
-                                    brand,
-                                    warn=pal["warn"],
-                                    hot=pal["hot"],
-                                    crit=pal["crit"],
-                                ),
-                            ),
-                        ]
+                        w_label = str(w.get("label") or "Usage")
+                        w_line = f"{w_label}    {wp:.0f}%"
+                        w_parts = [(w_line, None)]
                         sub = rumps.MenuItem(w_line)
                         sub.set_callback(noop)
                         _set_colored_title(sub, w_parts, w_line)
                         item.add(sub)
                         callbacks.append(sub)
+                    if plan:
+                        item.add(rumps.MenuItem(f"Plan: {plan}"))
                     reset = q.get("resets_at")
                     if reset:
                         try:
@@ -527,15 +561,25 @@ def run_menubar() -> None:
                             callbacks.append(sub)
                         except ValueError:
                             pass
+                    if burn is not None and burn.summary:
+                        burn_sub = rumps.MenuItem(f"    {burn.summary}")
+                        burn_sub.set_callback(noop)
+                        item.add(burn_sub)
+                        callbacks.append(burn_sub)
                 elif p.requests or p.total_tokens:
                     cost = f"  ·  ${p.cost_usd:.2f}" if p.cost_usd is not None else ""
                     add_enabled(
                         f"{letter}  {p.display_name}  ·  "
-                        f"{p.requests:,} req  ·  {p.total_tokens:,} tok{cost}"
+                        f"{p.requests:,} req  ·  {p.total_tokens:,} tok{cost}",
+                        parts=[
+                            (f"{letter}  ", brand),
+                            (f"{p.display_name}", None),
+                            (
+                                f"  ·  {p.requests:,} req  ·  {p.total_tokens:,} tok{cost}",
+                                None,
+                            ),
+                        ],
                     )
-                else:
-                    add_enabled(f"{letter}  {p.display_name}  ·  not configured")
-
             app.menu.add(None)
 
             # ── Switch which bar shows in the menu bar ──
@@ -543,39 +587,18 @@ def run_menubar() -> None:
             focus_menu.set_callback(noop)
             callbacks.append(focus_menu)
 
-            for pid in FOCUS_ORDER:
-                prov = _find_provider(report, pid)
-                if prov is None:
-                    continue
+            for prov in report.providers:
+                pid = prov.provider.value
                 style = PROVIDER_STYLE.get(
                     pid, {"short": pid, "letter": "?", "rgb": (120, 140, 160)}
                 )
                 brand = pal["brands"].get(pid, style["rgb"])
                 letter = style.get("letter") or "?"
                 pct = _quota_of(prov)
+                label = str(style["short"])
                 if pct is not None:
-                    label = f"{letter}  {style['short']}  ·  {pct:.0f}%"
-                    parts = [
-                        (f"{letter}  {style['short']}  ·  ", None),
-                        (
-                            f"{pct:.0f}%",
-                            _pct_rgb(
-                                pct,
-                                brand,
-                                warn=pal["warn"],
-                                hot=pal["hot"],
-                                crit=pal["crit"],
-                            ),
-                        ),
-                    ]
-                elif prov.source.value == "unavailable" and not (
-                    prov.requests or prov.total_tokens
-                ):
-                    label = f"{letter}  {style['short']}  ·  n/a"
-                    parts = None
-                else:
-                    label = f"{letter}  {style['short']}"
-                    parts = None
+                    label += f"    {pct:.0f}%"
+                parts = None
 
                 def _make_cb(provider_id: str):
                     def _cb(_=None, _pid=provider_id) -> None:
@@ -587,7 +610,7 @@ def run_menubar() -> None:
                 sub.set_callback(_make_cb(pid))
                 if parts:
                     _set_colored_title(sub, parts, label)
-                if state["focus"] == pid or (
+                if state.get("display_focus") == pid or (
                     state["focus"] == "openai" and pid == "codex"
                 ):
                     sub.state = 1
@@ -660,17 +683,14 @@ def run_menubar() -> None:
                 )
                 time.sleep(1.5)
                 webbrowser.open(
-                    _authenticated_dashboard_url()
-                    or f"http://{settings.host}:{settings.port}/"
+                    _authenticated_dashboard_url() or f"http://{settings.host}:{settings.port}/"
                 )
 
             threading.Thread(target=_run, daemon=True).start()
 
         def _refresh(_=None) -> None:
             app.title = " …"
-            threading.Thread(
-                target=lambda: do_collect(force_refresh=True), daemon=True
-            ).start()
+            threading.Thread(target=lambda: do_collect(force_refresh=True), daemon=True).start()
 
         def _quit(_=None) -> None:
             rumps.quit_application()
@@ -703,7 +723,7 @@ def run_menubar() -> None:
             try:
                 rumps.notification(
                     title=f"{name} — {label}",
-                    subtitle=f"{pct:.0f}% used",
+                    subtitle=f"{pct:.0f}% used",  # burn detail is in the menu; keep notify short
                     message="Almost at your usage limit."
                     if threshold >= 90
                     else "Approaching your usage limit.",
@@ -749,6 +769,9 @@ def run_menubar() -> None:
             app.title = " !"
             rebuild_menu(state.get("report"), error=error)
         else:
+            report = active_report(report, activity, now=time.time())
+            prefs["activity"] = activity
+            _save_prefs(prefs)
             state["report"] = report
             state["error"] = None
             _apply_status(app, report, state["focus"])

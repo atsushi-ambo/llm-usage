@@ -171,6 +171,14 @@ def claude_quota_from_oauth(data: dict[str, Any], *, plan: str | None = None) ->
                 pct = None
         if pct is None:
             return
+        # Known window lengths for burn-rate projection when period_start
+        # isn't present on the OAuth payload (usual for Claude Code).
+        window_seconds = {
+            "five_hour": 5 * 3600,
+            "seven_day": 7 * 86400,
+            "seven_day_sonnet": 7 * 86400,
+            "seven_day_opus": 7 * 86400,
+        }.get(key)
         windows.append(
             {
                 "key": key,
@@ -179,6 +187,7 @@ def claude_quota_from_oauth(data: dict[str, Any], *, plan: str | None = None) ->
                 "used": block.get("used"),
                 "limit": block.get("limit"),
                 "resets_at": unix_to_iso(block.get("resets_at") or block.get("resetsAt")),
+                "window_seconds": window_seconds,
             }
         )
 
@@ -209,6 +218,7 @@ def claude_quota_from_oauth(data: dict[str, Any], *, plan: str | None = None) ->
         "label": primary["label"] + " limit",
         "plan": plan or "Claude",
         "resets_at": primary.get("resets_at"),
+        "window_seconds": primary.get("window_seconds"),
         "windows": windows,
     }
 
