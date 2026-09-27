@@ -7,8 +7,6 @@ from llm_usage.menubar import (
     _unicode_bar,
     PROVIDER_STYLE,
     _RGB_CRIT,
-    _RGB_HOT,
-    _RGB_WARN,
 )
 from llm_usage.models import ProviderId, ProviderReport, SourceKind
 
@@ -100,17 +98,18 @@ def test_pct_rgb_heat_ramp():
     brand = PROVIDER_STYLE["claude"]["rgb"]
     assert _pct_rgb(10, brand) == brand
     assert _pct_rgb(49, brand) == brand
-    assert _pct_rgb(50, brand) == _RGB_WARN
-    assert _pct_rgb(70, brand) == _RGB_HOT
+    assert _pct_rgb(50, brand) == brand
+    assert _pct_rgb(70, brand) == brand
     assert _pct_rgb(90, brand) == _RGB_CRIT
 
 
-def test_vscode_palette_values():
-    assert PROVIDER_STYLE["claude"]["rgb"] == (206, 145, 120)
-    assert PROVIDER_STYLE["codex"]["rgb"] == (106, 153, 85)
-    assert PROVIDER_STYLE["grok"]["rgb"] == (197, 134, 192)
+def test_brand_palette_values():
+    assert PROVIDER_STYLE["claude"]["rgb"] == (198, 118, 82)
+    assert PROVIDER_STYLE["codex"]["rgb"] == (42, 148, 98)
+    assert PROVIDER_STYLE["grok"]["rgb"] == (108, 96, 196)
+    assert PROVIDER_STYLE["gemini"]["rgb"] == (184, 140, 36)
 
 
 def test_brighten_lifts_but_caps_at_255():
-    assert _brighten((100, 100, 100), 1.18) == (118, 118, 118)
-    assert _brighten((240, 240, 240), 1.18) == (255, 255, 255)
+    assert _brighten((100, 100, 100), 1.22) == (122, 122, 122)
+    assert _brighten((240, 240, 240), 1.22) == (255, 255, 255)

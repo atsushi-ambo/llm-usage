@@ -4,6 +4,16 @@ from llm_usage.config import Settings
 from llm_usage.validation import ValidationError, validate_settings, format_validation_errors
 
 
+def test_validate_settings_zero_budget_disables_alerts():
+    settings = Settings(budget_limit=0.0, budget_alert_threshold=0.9, days=30, port=8765)
+    errors = validate_settings(settings)
+    assert not any(e.field == "LLM_USAGE_BUDGET_LIMIT" for e in errors)
+
+
+def test_default_budget_limit_is_disabled():
+    assert Settings.model_fields["budget_limit"].default == 0.0
+
+
 def test_validate_settings_valid():
     """Test validation with valid settings."""
     settings = Settings(
@@ -25,7 +35,7 @@ def test_validate_settings_invalid_budget():
     )
     errors = validate_settings(settings)
     assert len(errors) > 0
-    assert any("Budget limit must be greater than 0" in e.message for e in errors)
+    assert any("Budget limit cannot be negative" in e.message for e in errors)
     assert any("Alert threshold must be between 0 and 1" in e.message for e in errors)
 
 

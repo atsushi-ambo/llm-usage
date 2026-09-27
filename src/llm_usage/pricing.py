@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 # Snapshot date for the table below (ISO). Shown next to ~ estimates so
 # consumers know how stale the list-price math might be.
-PRICES_AS_OF = "2026-07-26"
+PRICES_AS_OF = "2026-08-10"
 
 
 @dataclass(frozen=True)
@@ -57,12 +57,18 @@ PRICES: dict[str, ModelPrice] = {
     # Modern Opus default for unknown future ids (legacy 4/4.1 have longer keys).
     "claude-opus": ModelPrice(5.0, 25.0, 0.50, 6.25),
     "claude-haiku": ModelPrice(1.0, 5.0, 0.10, 1.25),
-    # OpenAI
+    # OpenAI — longer keys first (longest match wins among word-boundary hits).
+    "gpt-4.1-mini": ModelPrice(0.40, 1.60),
+    "gpt-4.1-nano": ModelPrice(0.10, 0.40),
     "gpt-4.1": ModelPrice(2.0, 8.0),
-    "gpt-4o": ModelPrice(2.50, 10.0),
     "gpt-4o-mini": ModelPrice(0.15, 0.60),
+    "gpt-4o": ModelPrice(2.50, 10.0),
+    "o3-mini": ModelPrice(1.10, 4.40),
+    "o3-pro": ModelPrice(20.0, 80.0),
     "o3": ModelPrice(10.0, 40.0),
     "o4-mini": ModelPrice(1.10, 4.40),
+    "o1-pro": ModelPrice(150.0, 600.0),
+    "o1-mini": ModelPrice(1.10, 4.40),
     "o1": ModelPrice(15.0, 60.0),
     "gpt-4-turbo": ModelPrice(10.0, 30.0),
     "gpt-3.5-turbo": ModelPrice(0.50, 1.50),
@@ -73,7 +79,9 @@ PRICES: dict[str, ModelPrice] = {
     "grok-2": ModelPrice(2.0, 10.0),
     "grok-code": ModelPrice(0.20, 1.50),
     # Codex / OpenAI coding models
+    "gpt-5.1": ModelPrice(1.25, 10.0),
     "gpt-5": ModelPrice(1.25, 10.0),
+    "codex-mini": ModelPrice(0.25, 2.0),
     "codex": ModelPrice(1.25, 10.0),
     # Gemini
     "gemini-2.5-pro": ModelPrice(1.25, 10.0),
