@@ -75,3 +75,17 @@ def test_opus_46_estimate_not_legacy_triple():
         output_tokens=1_000_000,
     )
     assert cost == 30.0
+
+
+def test_longer_openai_keys_win_over_short_siblings():
+    # o3-mini must not fall through to the o3 $10/$40 row.
+    p = lookup_price("o3-mini-2025-01-31")
+    assert p is not None
+    assert p.input_per_m == 1.10
+    p2 = lookup_price("gpt-4.1-mini")
+    assert p2 is not None
+    assert p2.input_per_m == 0.40
+    # codex-mini should not inherit full codex rates.
+    p3 = lookup_price("codex-mini")
+    assert p3 is not None
+    assert p3.input_per_m == 0.25

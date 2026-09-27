@@ -26,11 +26,11 @@ def validate_settings(settings: Settings) -> list[ValidationError]:
     """Validate settings and return list of validation errors/warnings."""
     errors: list[ValidationError] = []
 
-    if settings.budget_limit <= 0:
+    if settings.budget_limit < 0:
         errors.append(
             ValidationError(
                 "LLM_USAGE_BUDGET_LIMIT",
-                "Budget limit must be greater than 0",
+                "Budget limit cannot be negative (0 disables alerts)",
                 "error",
             )
         )

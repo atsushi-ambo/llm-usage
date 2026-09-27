@@ -68,6 +68,9 @@ def test_index_accepts_token_query():
     r = client.get("/", params={"token": app.state.token})
     assert r.status_code == 200
     assert "llm-usage" in r.text.lower() or "Overview" in r.text
+    assert "Skip to content" in r.text
+    assert "hide-na" in r.text
+    assert "/static/app.js" in r.text
 
 
 def test_wrong_token_is_403():
@@ -119,3 +122,78 @@ def test_report_to_dict_redaction_unit():
     assert "subscription" not in meta
     assert "spend" not in meta
     assert data["estimated_cost_usd"] == 1.5
+
+
+def test_api_usage_sets_no_store_and_security_headers():
+    app = create_app(_settings())
+    client = TestClient(app)
+    r = client.get("/", params={"token": app.state.token})
+    assert r.status_code == 200
+    assert "no-store" in r.headers.get("Cache-Control", "")
+    assert "nosniff" in r.headers.get("X-Content-Type-Options", "")
+    csp = r.headers.get("Content-Security-Policy", "")
+    assert "script-src 'self'" in csp
+    assert "frame-ancestors 'none'" in csp
+    assert "object-src 'none'" in csp
+    assert r.headers.get("Cross-Origin-Opener-Policy") == "same-origin"
+
+
+def test_static_js_requires_token():
+    app = create_app(_settings())
+    client = TestClient(app)
+    r = client.get("/static/app.js")
+    assert r.status_code == 403
+    ok = client.get("/static/app.js", params={"token": app.state.token})
+    assert ok.status_code == 200
+    assert "extractQuota" in ok.text
+    assert "grok.com" in ok.text
+    assert "csvCell" in ok.text
+
+
+def test_token_query_sets_httponly_samesite_cookie():
+    app = create_app(_settings())
+    client = TestClient(app)
+    r = client.get("/", params={"token": app.state.token})
+    assert r.status_code == 200
+    cookie = r.cookies.get("llm_usage_token")
+    assert cookie == app.state.token
+    # Starlette's TestClient exposes Set-Cookie on the raw response.
+    header = r.headers.get("set-cookie", "")
+    assert "HttpOnly" in header or "httponly" in header.lower()
+    assert "samesite=strict" in header.lower()
+
+
+def test_testserver_host_rejected_outside_pytest(monkeypatch):
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    app = create_app(_settings())
+    client = TestClient(app)
+    r = client.get("/api/health", headers={"Host": "testserver"})
+    assert r.status_code == 400
+
+
+def test_loopback_host_accepts_trailing_dot():
+    app = create_app(_settings())
+    client = TestClient(app)
+    r = client.get("/api/health", headers={"Host": "localhost."})
+    assert r.status_code == 200
+
+
+def test_api_usage_attaches_burn_and_default_budget_disabled():
+    app = create_app(_settings())
+    client = TestClient(app)
+    report = _sample_report()
+    with patch(
+        "llm_usage.dashboard.app.collect_all_cached",
+        return_value=report,
+    ):
+        r = client.get(
+            "/api/usage",
+            params={"token": app.state.token, "days": 7},
+        )
+    assert r.status_code == 200
+    body = r.json()
+    quota = body["providers"][0]["meta"]["quota"]
+    assert "burn" in quota
+    assert quota["burn"]["hits_label"]
+    assert "budget_limit" in body
+    assert body["budget_limit"] == app.state.settings.budget_limit

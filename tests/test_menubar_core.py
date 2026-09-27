@@ -72,6 +72,18 @@ def test_palette_covers_every_provider_in_focus_order():
     assert missing == []
 
 
+def test_title_quota_chip_is_readable_name_and_percent():
+    from llm_usage.menubar_core import title_quota_chip
+
+    p = ProviderReport(
+        provider=ProviderId.GROK,
+        display_name="Grok Build / xAI",
+        source=SourceKind.SUBSCRIPTION,
+        meta={"quota": {"used_percent": 64.0, "label": "Weekly limit"}},
+    )
+    assert title_quota_chip(p) == "Grok 64%"
+
+
 def test_default_focus_is_a_known_provider():
     assert DEFAULT_FOCUS in PROVIDER_STYLE
     assert DEFAULT_FOCUS in FOCUS_ORDER

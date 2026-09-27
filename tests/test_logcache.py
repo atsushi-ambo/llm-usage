@@ -75,6 +75,21 @@ def test_logscan_writes_compact_json_with_source_path(tmp_path: Path):
     assert cached["data"] == {"lines": 1}
 
 
+def test_full_prune_is_throttled():
+    f = quota.cache_dir() / "logscan" / "ns" / "dummy.json"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text('{"path": "/no/such/file.jsonl", "data": {}}', encoding="utf-8")
+
+    removed_first = prune_missing_sources()
+    assert removed_first == 1
+    # Recreate an orphan; the second full sweep should no-op within the hour.
+    f.write_text('{"path": "/no/such/file.jsonl", "data": {}}', encoding="utf-8")
+    removed_second = prune_missing_sources()
+    assert removed_second == 0
+    # Explicit interval 0 still sweeps.
+    assert prune_missing_sources(min_interval_s=0) == 1
+
+
 def test_prune_drops_entries_for_deleted_sources(tmp_path: Path):
     f = tmp_path / "session.jsonl"
     f.write_text("session\n")
