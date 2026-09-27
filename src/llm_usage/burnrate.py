@@ -132,6 +132,7 @@ def project_burn(
     window_label: str | None = None,
     window_seconds: float | int | None = None,
     window_key: str | None = None,
+    estimate_pace: bool = True,
     now: datetime | None = None,
 ) -> BurnProjection | None:
     """Project when used_percent reaches 100% at the current linear rate.
@@ -155,6 +156,28 @@ def project_burn(
 
     remaining = 100.0 - used
     reset_dt = _parse_dt(resets_at)
+
+    if not estimate_pace or (reset_dt is not None and reset_dt <= now_dt):
+        summary = f"{remaining:.0f}% remaining"
+        if reset_dt is not None:
+            summary += (
+                f" · resets {_human_reset(reset_dt, now_dt)}"
+                if reset_dt > now_dt
+                else " · awaiting updated usage"
+            )
+        return BurnProjection(
+            used,
+            remaining,
+            None,
+            None,
+            None,
+            None,
+            None,
+            reset_dt,
+            f"{remaining:.0f}% left",
+            summary,
+            "low",
+        )
 
     if used >= 100.0:
         return BurnProjection(
@@ -266,15 +289,12 @@ def project_burn(
     if hits_before_reset is False and reset_dt is not None:
         hits_label = "ok till reset"
         summary = (
-            f"At current pace ({pct_per_day:.0f}%/day) you stay under 100% "
+            f"{remaining:.0f}% remaining · estimated to last "
             f"until reset {_human_reset(reset_dt, now_dt)}"
         )
     else:
         hits_label = _format_hits_at_portable(hits_at, now_dt)
-        summary = (
-            f"At current pace ({pct_per_day:.0f}%/day) hits 100% "
-            f"{_human_reset(hits_at, now_dt)}"
-        )
+        summary = f"{remaining:.0f}% remaining · estimated limit {_human_reset(hits_at, now_dt)}"
         if reset_dt is not None:
             summary += f" (before reset {_human_reset(reset_dt, now_dt)})"
 
@@ -340,6 +360,7 @@ def project_from_quota(
         window_label=quota.get("label"),
         window_seconds=quota.get("window_seconds") or quota.get("limit_window_seconds"),
         window_key=quota.get("key"),
+        estimate_pace=quota.get("estimate_pace", True),
         now=now,
     )
 
@@ -372,6 +393,7 @@ def enrich_quota_dict(
                 or out.get("window_seconds")
                 or out.get("limit_window_seconds"),
                 window_key=wc.get("key"),
+                estimate_pace=wc.get("estimate_pace", out.get("estimate_pace", True)),
                 now=now,
             )
             if wp is not None:

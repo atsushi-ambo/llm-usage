@@ -66,9 +66,7 @@ def collect_codex(
     token_info = _read_codex_auth(auth_path)
     if token_info:
         try:
-            live = _fetch_wham_usage(
-                token_info["access_token"], token_info.get("account_id")
-            )
+            live = _fetch_wham_usage(token_info["access_token"], token_info.get("account_id"))
             report.meta["subscription"] = live
             plan = live.get("plan_type")
             if plan:
@@ -84,11 +82,11 @@ def collect_codex(
                 if isinstance(reset_unix, (int, float)) and reset_unix > 0:
                     from datetime import datetime, timezone
 
-                    resets_at = datetime.fromtimestamp(
-                        reset_unix, tz=timezone.utc
-                    ).isoformat()
+                    resets_at = datetime.fromtimestamp(reset_unix, tz=timezone.utc).isoformat()
                 window_secs = primary.get("limit_window_seconds")
                 label = "Usage window"
+                if isinstance(window_secs, (int, float)) and 0 < window_secs < 86400:
+                    label = f"{window_secs / 3600:g}-hour window"
                 if isinstance(window_secs, (int, float)) and window_secs >= 86400:
                     days = int(window_secs) // 86400
                     label = f"{days}-day window" if days != 7 else "Weekly window"
@@ -103,9 +101,37 @@ def collect_codex(
                         if isinstance(window_secs, (int, float)) and window_secs > 0
                         else None
                     ),
+                    "estimate_pace": False,
                     "allowed": rate.get("allowed"),
                     "limit_reached": rate.get("limit_reached"),
                 }
+                windows = []
+                for key, raw in (
+                    ("primary", primary),
+                    ("secondary", rate.get("secondary_window") or {}),
+                ):
+                    if raw.get("used_percent") is None:
+                        continue
+                    seconds = raw.get("limit_window_seconds")
+                    window_label = "Usage window"
+                    if isinstance(seconds, (int, float)) and seconds > 0:
+                        window_label = "Weekly" if seconds == 604800 else f"{seconds / 3600:g}-hour"
+                    reset = raw.get("reset_at")
+                    from datetime import datetime, timezone
+
+                    windows.append(
+                        {
+                            "key": key,
+                            "label": window_label,
+                            "used_percent": float(raw["used_percent"]),
+                            "window_seconds": seconds,
+                            "estimate_pace": False,
+                            "resets_at": datetime.fromtimestamp(reset, tz=timezone.utc).isoformat()
+                            if isinstance(reset, (int, float)) and reset > 0
+                            else None,
+                        }
+                    )
+                report.meta["quota"]["windows"] = windows
                 report.notes.append(
                     f"Live Codex quota: {used}% of primary window used "
                     f"(plan={plan or 'unknown'}, allowed={rate.get('allowed')})."
@@ -116,8 +142,7 @@ def collect_codex(
             report.errors.append(f"Codex quota API: {safe_error_str(exc)}")
     elif not (root / "sessions").exists():
         report.notes.append(
-            "No ~/.codex found. Install Codex CLI and sign in with ChatGPT "
-            "(works on Free plan)."
+            "No ~/.codex found. Install Codex CLI and sign in with ChatGPT (works on Free plan)."
         )
     else:
         report.notes.append(
@@ -161,9 +186,7 @@ def _fetch_wham_usage(access_token: str, account_id: str | None) -> dict[str, An
     if account_id:
         headers["ChatGPT-Account-Id"] = account_id
     with httpx.Client(timeout=20.0, follow_redirects=True) as client:
-        resp = client.get(
-            "https://chatgpt.com/backend-api/wham/usage", headers=headers
-        )
+        resp = client.get("https://chatgpt.com/backend-api/wham/usage", headers=headers)
         resp.raise_for_status()
         return resp.json()
 

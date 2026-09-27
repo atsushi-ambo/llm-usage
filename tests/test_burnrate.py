@@ -228,3 +228,62 @@ def test_claude_display_quota_carries_window_seconds_for_burn():
     burn = burn_of(p)
     # burn_of uses wall clock; with window_seconds we at least get a projection
     assert burn is not None
+
+
+def test_codex_reports_remaining_without_inventing_a_pace():
+    from llm_usage.burnrate import project_from_quota
+
+    q = {
+        "used_percent": 75,
+        "window_seconds": 18000,
+        "resets_at": (NOW + timedelta(hours=4, minutes=59)).isoformat(),
+        "estimate_pace": False,
+    }
+    p = project_from_quota(q, now=NOW)
+    assert p.remaining_percent == 25
+    assert p.hits_at is None
+    assert p.pct_per_day is None
+    assert "25% remaining" in p.summary
+    assert "/day" not in p.summary
+
+
+def test_expired_window_does_not_forecast_exhaustion():
+    p = project_burn(75, resets_at=NOW - timedelta(minutes=1), window_seconds=18000, now=NOW)
+    assert p.hits_at is None
+    assert "awaiting updated usage" in p.summary
+
+
+def test_codex_windows_and_no_pace_survive_slim_report(monkeypatch, tmp_path):
+    from llm_usage.providers import codex
+    from llm_usage.config import Settings
+    from llm_usage.serialize import slim_report_for_menubar
+
+    monkeypatch.setattr(codex, "_read_codex_auth", lambda _: {"access_token": "test"})
+    monkeypatch.setattr(
+        codex,
+        "_fetch_wham_usage",
+        lambda *args: {
+            "plan_type": "plus",
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 75,
+                    "limit_window_seconds": 18000,
+                    "reset_at": (NOW + timedelta(hours=3)).timestamp(),
+                },
+                "secondary_window": {
+                    "used_percent": 37,
+                    "limit_window_seconds": 604800,
+                    "reset_at": (NOW + timedelta(days=3)).timestamp(),
+                },
+            },
+        },
+    )
+    r = codex.collect_codex(Settings(), NOW.date(), NOW.date(), quota_only=True)
+    report = AggregateReport(period_start=NOW.date(), period_end=NOW.date(), providers=[r])
+    q = slim_report_for_menubar(report).providers[0].meta["quota"]
+    assert q["label"] == "5-hour window"
+    assert q["estimate_pace"] is False
+    assert [w["used_percent"] for w in q["windows"]] == [75, 37]
+    enriched = enrich_quota_dict(q, now=NOW)
+    assert enriched["burn"]["hits_at"] is None
+    assert all(w["burn"]["hits_at"] is None for w in enriched["windows"])
