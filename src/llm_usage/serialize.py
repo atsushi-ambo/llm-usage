@@ -23,10 +23,11 @@ RAW_META_KEYS = {
 
 # Meta keys the menubar actually reads for bars / labels.
 _MENUBAR_META_KEYS = frozenset(
-    {"quota", "plan_type", "console_url", "billing_source"}
+    {"quota", "quota_stale", "plan_type", "console_url", "billing_source"}
 )
 _QUOTA_KEYS = frozenset(
     {
+        "estimate_pace",
         "used_percent",
         "label",
         "plan",
@@ -37,7 +38,9 @@ _QUOTA_KEYS = frozenset(
         "window_seconds",
     }
 )
-_WINDOW_KEYS = frozenset({"key", "label", "used_percent", "resets_at", "window_seconds"})
+_WINDOW_KEYS = frozenset(
+    {"key", "label", "used_percent", "resets_at", "window_seconds", "estimate_pace"}
+)
 
 
 def report_to_dict(report: AggregateReport, *, include_raw_meta: bool = False) -> dict[str, Any]:

@@ -47,12 +47,12 @@ from llm_usage.menubar_core import (
 )
 from llm_usage.models import AggregateReport
 
-# Poll gently — quota barely moves minute-to-minute. Less frequent = less RAM/CPU.
-REFRESH_SECONDS = 300
+# Refresh small quota snapshots twice a minute; retain only the latest report.
+REFRESH_SECONDS = 30
 # Menubar uses quota_only collection (no log scans); days only labels the period.
 MENUBAR_DAYS = 1
 # Reuse the light quota snapshot between polls.
-MENUBAR_SNAPSHOT_TTL_S = 240.0
+MENUBAR_SNAPSHOT_TTL_S = 20.0
 
 # Private aliases keep this module's existing call sites (and tests that
 # import from `llm_usage.menubar`) working after the split.
@@ -402,10 +402,11 @@ def run_menubar() -> None:
         if p is not None:
             focus = p.provider.value
         state["display_focus"] = focus if p else None
+        # Keep the status item accessible while all providers are idle.
         nsapp = getattr(app_obj, "_nsapp", None)
         status_item = getattr(nsapp, "nsstatusitem", None)
         if status_item is not None:
-            status_item.setVisible_(p is not None)
+            status_item.setVisible_(True)
 
         if p is None:
             pct = None
@@ -426,7 +427,7 @@ def run_menubar() -> None:
             if state.get("status_key") != key:
                 state["status_key"] = key
                 # System color — NES brights are unreadable in the clock strip.
-                app_obj.title = f" {_title_quota_chip(p)}" if p else ""
+                app_obj.title = f" {_title_quota_chip(p)}" if p else "AI"
                 _set_status_tooltip(app_obj, "")
                 try:
                     app_obj.icon = None
@@ -496,6 +497,9 @@ def run_menubar() -> None:
             add_enabled(f"Updated {datetime.now().strftime('%H:%M')}")
             app.menu.add(None)
 
+            if not report.providers:
+                add_enabled("No recent usage")
+
             # ── Per-provider: system labels, colored bar + % only ──
             for p in report.providers:
                 pct = _quota_of(p)
@@ -537,7 +541,15 @@ def run_menubar() -> None:
                             continue
                         wp = float(w["used_percent"])
                         w_label = str(w.get("label") or "Usage")
-                        w_line = f"{w_label}    {wp:.0f}%"
+                        w_line = f"{w_label}    {wp:.0f}% used · {100 - wp:.0f}% remaining"
+                        if w.get("resets_at"):
+                            try:
+                                reset_local = datetime.fromisoformat(
+                                    str(w["resets_at"]).replace("Z", "+00:00")
+                                ).astimezone()
+                                w_line += f" · resets {reset_local:%b %d, %H:%M %Z}"
+                            except ValueError:
+                                pass
                         w_parts = [(w_line, None)]
                         sub = rumps.MenuItem(w_line)
                         sub.set_callback(noop)
@@ -549,11 +561,13 @@ def run_menubar() -> None:
                     reset = q.get("resets_at")
                     if reset:
                         try:
-                            d = datetime.fromisoformat(str(reset).replace("Z", "+00:00"))
+                            d = datetime.fromisoformat(
+                                str(reset).replace("Z", "+00:00")
+                            ).astimezone()
                             reset_txt = (
-                                f"    {label} resets {d.strftime('%b %d, %H:%M')}"
+                                f"    {label} resets {d.strftime('%b %d, %H:%M %Z')}"
                                 if label
-                                else f"    Resets {d.strftime('%b %d, %H:%M')}"
+                                else f"    Resets {d.strftime('%b %d, %H:%M %Z')}"
                             )
                             sub = rumps.MenuItem(reset_txt)
                             sub.set_callback(noop)
@@ -619,8 +633,9 @@ def run_menubar() -> None:
                 focus_menu.add(sub)
                 callbacks.append(sub)
 
-            app.menu.add(focus_menu)
-            callbacks.append(focus_menu)
+            if report.providers:
+                app.menu.add(focus_menu)
+                callbacks.append(focus_menu)
 
             costs = [p.cost_usd for p in report.providers if p.cost_usd is not None]
             if costs:

@@ -85,3 +85,38 @@ def test_newly_available_window_only_establishes_baseline():
     expanded = report(23)
     expanded.providers[0].meta["quota"]["windows"] = [{"key": "weekly", "used_percent": 57}]
     assert not active_report(expanded, activity, now=10100).providers
+
+
+def test_codex_remains_visible_until_five_hour_reset():
+    from datetime import datetime, timezone
+
+    activity = {}
+    codex = report(88)
+    codex.providers[0].meta["quota"]["resets_at"] = datetime.fromtimestamp(
+        20000, timezone.utc
+    ).isoformat()
+    assert len(active_report(codex, activity, now=10000).providers) == 1
+    assert len(active_report(codex, activity, now=19000).providers) == 1
+    assert not active_report(codex, activity, now=20001).providers
+
+
+def test_codex_stale_quota_does_not_keep_it_visible():
+    from datetime import datetime, timezone
+
+    activity = {}
+    codex = report(88)
+    codex.providers[0].meta["quota"]["resets_at"] = datetime.fromtimestamp(
+        20000, timezone.utc
+    ).isoformat()
+    codex.providers[0].meta["quota_stale"] = True
+    assert not active_report(codex, activity, now=10000).providers
+
+
+def test_codex_weekly_usage_does_not_revive_reset_five_hour_window():
+    activity = {}
+    initial = report(0)
+    initial.providers[0].meta["quota"]["windows"] = [{"key": "secondary", "used_percent": 14}]
+    active_report(initial, activity, now=10000)
+    later = report(0)
+    later.providers[0].meta["quota"]["windows"] = [{"key": "secondary", "used_percent": 15}]
+    assert not active_report(later, activity, now=11000).providers

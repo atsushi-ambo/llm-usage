@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import math
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TypedDict
 
@@ -255,6 +256,10 @@ def active_report(
                 for i, w in enumerate(quota.get("windows") or [])
             ],
         ]
+        if pid == "codex":
+            # The five-hour balance is the menubar headline. Weekly changes
+            # must not make a reset five-hour window look newly active.
+            windows = windows[:1]
         for key, window in [] if provider.meta.get("quota_stale") else windows:
             try:
                 value = float(window.get("used_percent"))
@@ -276,7 +281,22 @@ def active_report(
         )
         # Missing data must not erase a baseline and manufacture activity on recovery.
         activity[pid] = {"version": 2, "readings": {**old, **readings}, "last_active": last_active}
-        if last_active and 0 <= now - last_active < timeout:
+        current_window = False
+        if pid == "codex" and not provider.meta.get("quota_stale"):
+            try:
+                raw_used = quota.get("used_percent")
+                if raw_used is None:
+                    raise ValueError("no current usage")
+                used = float(raw_used)
+                reset = quota.get("resets_at")
+                if isinstance(reset, str):
+                    reset_at = datetime.fromisoformat(reset.replace("Z", "+00:00"))
+                    if reset_at.tzinfo is None:
+                        reset_at = reset_at.replace(tzinfo=timezone.utc)
+                    current_window = math.isfinite(used) and used > 0 and now < reset_at.timestamp()
+            except (TypeError, ValueError, OverflowError):
+                pass
+        if current_window or (last_active and 0 <= now - last_active < timeout):
             visible.append(provider)
     return report.model_copy(update={"providers": visible})
 
