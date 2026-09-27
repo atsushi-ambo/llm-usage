@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
 
-from llm_usage.config import _default_config_dir, get_profile_env_file
+from llm_usage.config import _default_config_dir, atomic_write_text, get_profile_env_file
 
 console = Console()
 
@@ -140,8 +139,5 @@ def _write_env_file(env_file: Path, env_vars: dict[str, str]) -> None:
     for key in sorted(env_vars):
         if key not in seen and env_vars[key] != "":
             lines.append(f"{key}={env_vars[key]}")
-    env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    try:
-        os.chmod(env_file, 0o600)
-    except OSError:
-        pass
+    env_file.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(env_file, "\n".join(lines) + "\n")

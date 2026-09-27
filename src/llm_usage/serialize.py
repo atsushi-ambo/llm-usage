@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from llm_usage.burnrate import enrich_quota_dict
 from llm_usage.models import AggregateReport, ProviderReport
 from llm_usage.pricing import PRICES_AS_OF
 
@@ -25,20 +26,38 @@ _MENUBAR_META_KEYS = frozenset(
     {"quota", "plan_type", "console_url", "billing_source"}
 )
 _QUOTA_KEYS = frozenset(
-    {"used_percent", "label", "plan", "resets_at", "windows", "period_start", "period_type"}
+    {
+        "used_percent",
+        "label",
+        "plan",
+        "resets_at",
+        "windows",
+        "period_start",
+        "period_type",
+        "window_seconds",
+    }
 )
-_WINDOW_KEYS = frozenset({"key", "label", "used_percent", "resets_at"})
+_WINDOW_KEYS = frozenset({"key", "label", "used_percent", "resets_at", "window_seconds"})
 
 
 def report_to_dict(report: AggregateReport, *, include_raw_meta: bool = False) -> dict[str, Any]:
-    """Serialize a report, stripping verbatim upstream payloads by default."""
+    """Serialize a report, stripping verbatim upstream payloads by default.
+
+    Attaches burn-rate projections onto each provider's `meta.quota` (and
+    each window) so the dashboard / JSON consumers don't reimplement the
+    linear pace math.
+    """
     data = report.model_dump(mode="json")
-    if not include_raw_meta:
-        for provider in data.get("providers", []):
-            meta = provider.get("meta")
-            if isinstance(meta, dict):
-                for key in RAW_META_KEYS:
-                    meta.pop(key, None)
+    for provider in data.get("providers", []):
+        meta = provider.get("meta")
+        if not isinstance(meta, dict):
+            continue
+        if not include_raw_meta:
+            for key in RAW_META_KEYS:
+                meta.pop(key, None)
+        quota = meta.get("quota")
+        if isinstance(quota, dict) and quota.get("used_percent") is not None:
+            meta["quota"] = enrich_quota_dict(quota)
     # List-price snapshot date for ~ estimate footnotes (CLI / dashboard).
     data["prices_as_of"] = PRICES_AS_OF
     # Properties aren't in model_dump — surface cost splits for consumers.
