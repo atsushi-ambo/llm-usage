@@ -97,6 +97,12 @@ def collect_codex(
                     "label": label,
                     "plan": plan or "free",
                     "resets_at": resets_at,
+                    # Used by burn-rate projection (window start = resets_at - this).
+                    "window_seconds": (
+                        float(window_secs)
+                        if isinstance(window_secs, (int, float)) and window_secs > 0
+                        else None
+                    ),
                     "allowed": rate.get("allowed"),
                     "limit_reached": rate.get("limit_reached"),
                 }
