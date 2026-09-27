@@ -55,3 +55,42 @@ def test_plan_usage_used_as_fallback_when_no_aggregations():
     body = {"gpt-4o": {"numRequests": 12, "maxRequestUsage": 100}}
     _apply_dashboard_body(report, body)
     assert report.requests == 12
+
+
+def test_total_lines_added_is_never_counted_as_requests():
+    # Cursor daily rows sometimes include IDE edit metrics. Those are not
+    # model requests and must not inflate the request total.
+    report = _empty_report()
+    body = {
+        "data": [
+            {
+                "date": "2026-07-01",
+                "totalLinesAdded": 5000,
+                "totalLinesDeleted": 200,
+            }
+        ]
+    }
+    _parse_daily_usage(report, body)
+    assert report.requests == 0
+
+
+def test_claude_oauth_fixture_normalizes_utilization():
+    """Fixture-style: Anthropic OAuth utilization is 0–1; we surface 0–100."""
+    from llm_usage.quota import claude_quota_from_oauth
+
+    body = {
+        "five_hour": {
+            "utilization": 0.42,
+            "resets_at": 1_786_000_000,
+        },
+        "seven_day": {
+            "utilization": 0.11,
+            "resets_at": 1_786_500_000,
+        },
+    }
+    q = claude_quota_from_oauth(body, plan="pro")
+    assert q["used_percent"] == 42.0
+    assert q["window_seconds"] == 5 * 3600
+    assert len(q["windows"]) == 2
+    assert q["windows"][0]["key"] == "five_hour"
+    assert q["windows"][0]["window_seconds"] == 5 * 3600

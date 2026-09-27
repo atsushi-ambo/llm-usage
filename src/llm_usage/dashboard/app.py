@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import secrets
 from pathlib import Path
 
@@ -23,15 +24,46 @@ COOKIE_NAME = "llm_usage_token"
 # liveness probe keeps working, and neither leaks anything sensitive.
 _OPEN_PATHS = {"/api/health"}
 
+# (mtime, html) so editable installs pick up index.html changes without a
+# process restart, but we don't re-read the file on every request.
+_index_cache: tuple[float, str] | None = None
+
 
 def _hostname_only(host_header: str) -> str:
-    host_header = host_header.strip()
+    # Trailing dots (DNS absolute-name form: "localhost.") and case must not
+    # bypass the loopback allow-list, nor reject a legitimate local client.
+    host_header = host_header.strip().rstrip(".").lower()
     if host_header.startswith("["):
         # IPv6 literal, e.g. "[::1]:8765" or "[::1]"
         return host_header.split("]")[0].lstrip("[")
     if host_header.count(":") == 1:
         return host_header.split(":", 1)[0]
     return host_header
+
+
+def _tokens_match(supplied: str | None, expected: str) -> bool:
+    if not supplied or not expected:
+        return False
+    try:
+        return secrets.compare_digest(supplied, expected)
+    except (TypeError, ValueError):
+        return False
+
+
+def _read_index_html() -> str:
+    global _index_cache
+    html_path = STATIC_DIR / "index.html"
+    if not html_path.exists():
+        return "<h1>llm-usage</h1><p>Missing static/index.html</p>"
+    try:
+        mtime = html_path.stat().st_mtime
+    except OSError:
+        return "<h1>llm-usage</h1><p>Missing static/index.html</p>"
+    if _index_cache is not None and _index_cache[0] == mtime:
+        return _index_cache[1]
+    text = html_path.read_text(encoding="utf-8")
+    _index_cache = (mtime, text)
+    return text
 
 
 class LoopbackHostMiddleware(BaseHTTPMiddleware):
@@ -43,11 +75,16 @@ class LoopbackHostMiddleware(BaseHTTPMiddleware):
     reaches any route.
     """
 
-    ALLOWED_HOSTNAMES = {"127.0.0.1", "localhost", "::1", "testserver"}
+    ALLOWED_HOSTNAMES = {"127.0.0.1", "localhost", "::1"}
 
     async def dispatch(self, request: Request, call_next):
         host = _hostname_only(request.headers.get("host", ""))
-        if host not in self.ALLOWED_HOSTNAMES:
+        allowed = set(self.ALLOWED_HOSTNAMES)
+        # Starlette's TestClient sends Host: testserver. Keep that out of
+        # the production allow-list so it isn't a DNS-rebinding alias.
+        if os.environ.get("PYTEST_CURRENT_TEST"):
+            allowed.add("testserver")
+        if host not in allowed:
             return JSONResponse({"error": "Host not allowed"}, status_code=400)
         return await call_next(request)
 
@@ -72,10 +109,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         supplied = request.query_params.get("token")
         cookie_token = request.cookies.get(COOKIE_NAME)
-        supplied_ok = bool(supplied) and secrets.compare_digest(supplied, self._token)
-        cookie_ok = bool(cookie_token) and secrets.compare_digest(
-            cookie_token, self._token
-        )
+        supplied_ok = _tokens_match(supplied, self._token)
+        cookie_ok = _tokens_match(cookie_token, self._token)
 
         if not (supplied_ok or cookie_ok):
             return JSONResponse(
@@ -100,17 +135,26 @@ class AuthMiddleware(BaseHTTPMiddleware):
         return response
 
 
-def _security_headers(response: Response) -> None:
+def _security_headers(response: Response, *, no_store: bool = False) -> None:
     # script-src is 'self' only (no 'unsafe-inline', no CDN): all JS lives in
     # /static/app.js. Charts are pure SVG drawn by that file.
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; style-src 'self' 'unsafe-inline'; "
         "script-src 'self'; img-src 'self' data:; "
-        "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'"
+        "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; "
+        "form-action 'none'; object-src 'none'"
     )
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Permissions-Policy"] = (
+        "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+    )
+    response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+    response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+    if no_store:
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -137,7 +181,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.middleware("http")
     async def add_security_headers(request: Request, call_next):
         response = await call_next(request)
-        _security_headers(response)
+        path = request.url.path
+        _security_headers(
+            response,
+            no_store=path == "/" or path.startswith("/api/"),
+        )
         return response
 
     @app.get("/api/health")
@@ -162,10 +210,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> HTMLResponse:
-        html_path = STATIC_DIR / "index.html"
-        if not html_path.exists():
-            return HTMLResponse("<h1>llm-usage</h1><p>Missing static/index.html</p>")
-        return HTMLResponse(html_path.read_text(encoding="utf-8"))
+        return HTMLResponse(_read_index_html())
 
     return app
 
