@@ -560,6 +560,9 @@ def doctor_cmd(
         elif p.errors:
             status = "partial"
             healthy = False
+        elif (p.meta or {}).get("quota_stale"):
+            status = "partial"
+            healthy = False
         else:
             status = "ok"
 

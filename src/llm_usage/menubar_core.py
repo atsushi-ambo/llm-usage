@@ -17,13 +17,12 @@ from __future__ import annotations
 
 import json
 import math
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import TypedDict
 
 from llm_usage.burnrate import BurnProjection, project_from_quota
 from llm_usage.models import AggregateReport, ProviderId, ProviderReport
-from llm_usage.quota import atomic_write_json, quota_windows
+from llm_usage.quota import atomic_write_json, quota_windows, reset_still_ahead
 
 RGB = tuple[int, int, int]
 
@@ -226,6 +225,33 @@ def find_provider(report: AggregateReport, pid: str) -> ProviderReport | None:
 ACTIVITY_TIMEOUT_SECONDS = 30 * 60
 
 
+def quota_window_open(provider: ProviderReport, now: float) -> bool:
+    """True when a five-hour, weekly, or other quota window still holds usage.
+
+    A single use stays on screen until that window resets, even if the
+    provider is idle afterward. A window that has already reset does not
+    count. `used_percent` of 0 is an empty window. Stale quota does not count.
+    """
+    if (provider.meta or {}).get("quota_stale"):
+        return False
+    quota = (provider.meta or {}).get("quota") or {}
+    candidates = [quota, *(quota.get("windows") or [])]
+    for window in candidates:
+        if not isinstance(window, dict):
+            continue
+        try:
+            used = float(window.get("used_percent"))
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(used) or used <= 0:
+            continue
+        pending = reset_still_ahead(window.get("resets_at"), now)
+        if pending is False:
+            continue
+        return True
+    return False
+
+
 def active_report(
     report: AggregateReport,
     activity: dict,
@@ -233,11 +259,13 @@ def active_report(
     now: float,
     timeout: float = ACTIVITY_TIMEOUT_SECONDS,
 ) -> AggregateReport:
-    """Track usage increases, not polling timestamps or quota resets.
+    """Keep providers whose quota windows still hold usage.
 
+    A five-hour or weekly balance stays visible until that window resets.
     The first reading establishes a baseline, never evidence of activity.
-    Persisted observations prevent restarts from reviving idle providers.
-    Hidden providers are still collected so new usage brings them back.
+    Persisted observations prevent restarts from reviving idle providers
+    that have no open window. Hidden providers are still collected so new
+    usage brings them back.
     """
     visible = []
     for provider in report.providers:
@@ -257,8 +285,9 @@ def active_report(
             ],
         ]
         if pid == "codex":
-            # The five-hour balance is the menubar headline. Weekly changes
-            # must not make a reset five-hour window look newly active.
+            # Activity tracking follows the five-hour headline. A weekly
+            # tick must not look like fresh use after that window resets.
+            # Visibility still considers every open window below.
             windows = windows[:1]
         for key, window in [] if provider.meta.get("quota_stale") else windows:
             try:
@@ -281,22 +310,9 @@ def active_report(
         )
         # Missing data must not erase a baseline and manufacture activity on recovery.
         activity[pid] = {"version": 2, "readings": {**old, **readings}, "last_active": last_active}
-        current_window = False
-        if pid == "codex" and not provider.meta.get("quota_stale"):
-            try:
-                raw_used = quota.get("used_percent")
-                if raw_used is None:
-                    raise ValueError("no current usage")
-                used = float(raw_used)
-                reset = quota.get("resets_at")
-                if isinstance(reset, str):
-                    reset_at = datetime.fromisoformat(reset.replace("Z", "+00:00"))
-                    if reset_at.tzinfo is None:
-                        reset_at = reset_at.replace(tzinfo=timezone.utc)
-                    current_window = math.isfinite(used) and used > 0 and now < reset_at.timestamp()
-            except (TypeError, ValueError, OverflowError):
-                pass
-        if current_window or (last_active and 0 <= now - last_active < timeout):
+        if quota_window_open(provider, now) or (
+            last_active and 0 <= now - last_active < timeout
+        ):
             visible.append(provider)
     return report.model_copy(update={"providers": visible})
 

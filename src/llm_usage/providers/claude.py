@@ -25,6 +25,7 @@ from llm_usage.quota import (
     claude_quota_from_oauth,
     clear_cooldown,
     cooldown_remaining,
+    prune_expired_quota,
     read_json_cache,
     read_json_cache_stale,
     write_cooldown,
@@ -92,56 +93,42 @@ def collect_claude(
     if oauth_token:
         if cred_meta.get("source"):
             report.meta["auth_source"] = cred_meta["source"]
-        if not _token_still_valid(cred_meta):
+        token_ok = _token_still_valid(cred_meta)
+        if token_ok:
+            # A fresh login should not wait out a 401/429 backoff.
+            clear_cooldown(_CACHE_NAME)
+        else:
             report.notes.append(
                 "Claude OAuth token looks expired — open Claude Code once to refresh, "
                 "or run `claude` login."
             )
+        plan = cred_meta.get("plan") or "Claude Code"
         try:
+            if not token_ok:
+                raise RuntimeError(
+                    "OAuth token expired — open Claude Code once to refresh, "
+                    "or run `claude` login"
+                )
             usage = _fetch_oauth_usage_cached(oauth_token)
-            report.meta["subscription"] = usage
-            q = claude_quota_from_oauth(
-                usage, plan=cred_meta.get("plan") or "Claude Code"
-            )
-            if q.get("used_percent") is not None:
-                report.meta["quota"] = q
-                if report.source == SourceKind.UNAVAILABLE:
-                    report.source = SourceKind.SUBSCRIPTION
-                note = f"Claude Code · plan={q.get('plan')}"
-                note += f" · {q.get('label', 'quota')} {q['used_percent']:.0f}% used"
-                if cred_meta.get("source") == "keychain":
-                    note += " · live"
-                report.notes.append(note)
-                # Secondary windows (primary is already in the headline note)
-                primary_label = (q.get("label") or "").replace(" limit", "").strip()
-                for w in q.get("windows") or []:
-                    if w.get("used_percent") is None:
-                        continue
-                    if (w.get("label") or "").strip() == primary_label:
-                        continue
-                    report.notes.append(
-                        f"  {w['label']}: {w['used_percent']:.0f}% used"
-                    )
-            else:
-                report.notes.append("Claude OAuth usage returned (no utilization fields)")
+            if not _apply_claude_quota(
+                report,
+                usage,
+                plan=plan,
+                stale=False,
+                live=cred_meta.get("source") == "keychain",
+            ):
+                report.notes.append("Claude OAuth usage returned (no current quota window)")
         except Exception as exc:  # noqa: BLE001
             # Still surface plan from credentials if we have local usage
-            stale = read_json_cache_stale(_CACHE_NAME)
-            if stale:
-                q = claude_quota_from_oauth(
-                    stale, plan=cred_meta.get("plan") or "Claude Code"
-                )
-                if q.get("used_percent") is not None:
-                    report.meta["quota"] = q
-                    report.meta["subscription"] = stale
-                    report.meta["quota_stale"] = True
-                    report.notes.append(
-                        f"Claude quota from cache ({q.get('label')}: "
-                        f"{q['used_percent']:.0f}%) — live API: {safe_error_str(exc)}"
-                    )
-                else:
-                    report.errors.append(f"OAuth usage: {safe_error_str(exc)}")
-            else:
+            cached = read_json_cache_stale(_CACHE_NAME)
+            if not _apply_claude_quota(
+                report,
+                cached or {},
+                plan=plan,
+                stale=True,
+                live=False,
+                failure=safe_error_str(exc),
+            ):
                 report.errors.append(f"OAuth usage: {safe_error_str(exc)}")
                 if cred_meta.get("plan"):
                     report.notes.append(
@@ -161,6 +148,51 @@ def collect_claude(
         )
 
     return report
+
+
+def _apply_claude_quota(
+    report: ProviderReport,
+    usage: dict[str, Any],
+    *,
+    plan: str,
+    stale: bool,
+    live: bool,
+    failure: str | None = None,
+) -> bool:
+    """Attach a still-open Claude quota window. Expired periods are dropped."""
+    q = prune_expired_quota(claude_quota_from_oauth(usage, plan=plan))
+    if not q or q.get("used_percent") is None:
+        return False
+    report.meta["quota"] = q
+    report.meta["subscription"] = usage
+    if stale:
+        report.meta["quota_stale"] = True
+    elif "quota_stale" in report.meta:
+        del report.meta["quota_stale"]
+    if report.source == SourceKind.UNAVAILABLE:
+        report.source = SourceKind.SUBSCRIPTION
+    if stale:
+        note = (
+            f"Claude quota from cache ({q.get('label')}: "
+            f"{q['used_percent']:.0f}%)"
+        )
+        if failure:
+            note += f" — live API: {failure}"
+        report.notes.append(note)
+        return True
+    note = f"Claude Code · plan={q.get('plan')}"
+    note += f" · {q.get('label', 'quota')} {q['used_percent']:.0f}% used"
+    if live:
+        note += " · live"
+    report.notes.append(note)
+    primary_label = (q.get("label") or "").replace(" limit", "").strip()
+    for w in q.get("windows") or []:
+        if w.get("used_percent") is None:
+            continue
+        if (w.get("label") or "").strip() == primary_label:
+            continue
+        report.notes.append(f"  {w['label']}: {w['used_percent']:.0f}% used")
+    return True
 
 
 def _apply_local(report: ProviderReport, local: dict[str, Any]) -> None:
@@ -627,9 +659,6 @@ def _fetch_oauth_usage_cached(token: str) -> dict[str, Any]:
     # A prior 429 told us to back off — honor it instead of re-triggering it.
     remaining = cooldown_remaining(_CACHE_NAME)
     if remaining > 0:
-        stale = read_json_cache_stale(_CACHE_NAME)
-        if stale is not None:
-            return stale
         raise RuntimeError(
             f"Rate limited — retrying in ~{int(remaining // 60) + 1} min"
         )
@@ -643,6 +672,8 @@ def _fetch_oauth_usage_cached(token: str) -> dict[str, Any]:
     with httpx.Client(timeout=20.0) as client:
         resp = client.get("https://api.anthropic.com/api/oauth/usage", headers=headers)
         if resp.status_code == 401:
+            # Stop the menubar from hammering a dead token every 30s.
+            write_cooldown(_CACHE_NAME, 6 * 3600)
             raise RuntimeError("OAuth token rejected (401) — re-login to Claude Code")
         if resp.status_code == 404:
             raise RuntimeError("OAuth usage not available for this account")

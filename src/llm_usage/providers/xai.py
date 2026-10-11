@@ -190,6 +190,8 @@ def _apply_billing_quota(
                 "key": name.lower(),
                 "label": name,
                 "used_percent": max(0.0, min(100.0, float(up))),
+                "resets_at": period.get("end"),
+                "period_start": period.get("start"),
             }
         )
 

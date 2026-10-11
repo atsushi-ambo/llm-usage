@@ -72,12 +72,20 @@ def test_quota_only_skips_grok_log_scan(monkeypatch):
             "subscription_tier": "X Premium",
             "credit_usage_percent": 12.0,
             "period": {"start": "2026-07-15", "end": "2026-07-22", "type": "weekly"},
-            "product_usage": [],
+            "product_usage": [
+                {"product": "GrokBuild", "usagePercent": 8.0},
+                {"product": "GrokChat", "usagePercent": 4.0},
+            ],
         },
     )
     start, end = date(2026, 7, 1), date(2026, 7, 2)
     report = xai_mod.collect_xai(_settings(), start, end, quota_only=True)
-    assert report.meta.get("quota", {}).get("used_percent") == 12.0
+    quota = report.meta.get("quota", {})
+    assert quota.get("used_percent") == 12.0
+    windows = {w["key"]: w for w in quota.get("windows") or []}
+    assert windows["grokbuild"]["used_percent"] == 8.0
+    assert windows["grokbuild"]["resets_at"] == "2026-07-22"
+    assert windows["grokchat"]["used_percent"] == 4.0
     assert report.models == []
     assert report.daily == []
 

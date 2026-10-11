@@ -138,6 +138,65 @@ def clear_cooldown(name: str) -> None:
         pass
 
 
+def reset_still_ahead(reset: object, now: float) -> bool | None:
+    """True when `reset` is still in the future, False when it has passed.
+
+    None means the window did not include a usable reset time.
+    """
+    if not isinstance(reset, str) or not reset:
+        return None
+    try:
+        reset_at = datetime.fromisoformat(reset.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if reset_at.tzinfo is None:
+        reset_at = reset_at.replace(tzinfo=timezone.utc)
+    try:
+        return now < reset_at.timestamp()
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def prune_expired_quota(
+    quota: dict[str, Any] | None, *, now: float | None = None
+) -> dict[str, Any] | None:
+    """Drop quota windows whose reset is already in the past.
+
+    A window with no reset time is kept. Returns None when nothing current
+    remains, so callers do not present a closed period as live usage.
+    """
+    if not quota:
+        return None
+    now_ts = time.time() if now is None else now
+    kept: list[dict[str, Any]] = []
+    for window in quota.get("windows") or []:
+        if not isinstance(window, dict) or window.get("used_percent") is None:
+            continue
+        if reset_still_ahead(window.get("resets_at"), now_ts) is False:
+            continue
+        kept.append(window)
+
+    primary_pending = reset_still_ahead(quota.get("resets_at"), now_ts)
+    if kept:
+        out = dict(quota)
+        out["windows"] = kept
+        if primary_pending is False or quota.get("used_percent") is None:
+            head = kept[0]
+            out["used_percent"] = head.get("used_percent")
+            label = str(head.get("label") or "quota").strip()
+            out["label"] = label if label.endswith("limit") else f"{label} limit"
+            out["resets_at"] = head.get("resets_at")
+            if head.get("window_seconds") is not None:
+                out["window_seconds"] = head.get("window_seconds")
+        return out
+
+    if quota.get("used_percent") is not None and primary_pending is not False:
+        out = dict(quota)
+        out["windows"] = []
+        return out
+    return None
+
+
 def unix_to_iso(ts: Any) -> str | None:
     if isinstance(ts, (int, float)) and ts > 0:
         # ms vs s

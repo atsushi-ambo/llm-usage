@@ -1,4 +1,4 @@
-"""macOS menu bar — one colorful usage bar + switchable provider.
+"""macOS menu bar — one usage mark + switchable provider.
 
 Only the AppKit/rumps glue lives here (NSColor, NSImage, timers, threads),
 which is why pyright skips this file. The decision logic it draws from —
@@ -214,6 +214,54 @@ def _set_status_item_title(
         pass
 
 
+def _remaining_pct(pct: float) -> int:
+    used = int(round(max(0.0, min(100.0, pct))))
+    return 100 - used
+
+
+def _quota_menu_line(name: str, pct: float) -> str:
+    """Short menu row. Remaining is the number people scan for."""
+    return f"{name}    {_remaining_pct(pct)}% left"
+
+
+def _pretty_window_label(raw: str) -> str:
+    label = {"GrokBuild": "Grok Build", "GrokChat": "Grok Chat"}.get(raw, raw)
+    return label.replace(" window", "").replace(" limit", "").strip() or raw
+
+
+def _format_reset(raw: object) -> str | None:
+    """Local reset time, short enough for a submenu row."""
+    try:
+        moment = datetime.fromisoformat(str(raw).replace("Z", "+00:00")).astimezone()
+        now = datetime.now().astimezone()
+        if moment.date() == now.date():
+            return f"today {moment:%H:%M}"
+        return f"{moment:%b %d, %H:%M}".replace(" 0", " ")
+    except (TypeError, ValueError, OSError):
+        return None
+
+
+def _pin_status_item(status_item) -> None:
+    """Keep the extra on the visible menu bar across macOS 27 restarts.
+
+    A new NSStatusItem without an autosave name is parked in the overflow
+    chevron. Pin the name and disallow removal so the glance stays by the
+    clock after a LaunchAgent restart.
+    """
+    try:
+        status_item.setAutosaveName_("com.llm-usage.menubar")
+    except Exception:
+        pass
+    try:
+        status_item.setBehavior_(0)
+    except Exception:
+        pass
+    try:
+        status_item.setVisible_(True)
+    except Exception:
+        pass
+
+
 def _set_status_tooltip(app_obj, text: str) -> None:
     try:
         nsapp = getattr(app_obj, "_nsapp", None)
@@ -238,10 +286,15 @@ def _render_single_bar_icon(
     hot: tuple[int, int, int] = _RGB_HOT,
     crit: tuple[int, int, int] = _RGB_CRIT,
     filename: str = "status.png",
-    pt_w: int = 24,
+    pt_w: int = 16,
     pt_h: int = 8,
+    template: bool = False,
 ) -> Path | None:
-    """Rounded usage pill for the status item and popup rows."""
+    """Rounded usage mark.
+
+    `template=True` draws black and clear only. macOS 27's menu bar is
+    transparent and recolors template images to match the other status icons.
+    """
     try:
         from AppKit import (  # type: ignore
             NSBezierPath,
@@ -287,17 +340,24 @@ def _render_single_bar_icon(
         y = pad
         radius = bar_h / 2
 
-        er, eg, eb = empty[0] / 255.0, empty[1] / 255.0, empty[2] / 255.0
-        NSColor.colorWithCalibratedRed_green_blue_alpha_(er, eg, eb, 1.0).set()
+        if template:
+            # Black with alpha. The system tints a template image.
+            NSColor.colorWithCalibratedWhite_alpha_(0.0, 0.28).set()
+        else:
+            er, eg, eb = empty[0] / 255.0, empty[1] / 255.0, empty[2] / 255.0
+            NSColor.colorWithCalibratedRed_green_blue_alpha_(er, eg, eb, 1.0).set()
         NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
             NSMakeRect(pad, y, track_w, bar_h), radius, radius
         ).fill()
 
-        fill_rgb = _bar_color_for_pct(pct, rgb, warn=warn, hot=hot, crit=crit)
-        r, g, b = fill_rgb[0] / 255.0, fill_rgb[1] / 255.0, fill_rgb[2] / 255.0
         if pct > 0:
             fill_w = max(bar_h * 0.95, track_w * (pct / 100.0))
-            NSColor.colorWithCalibratedRed_green_blue_alpha_(r, g, b, 1.0).set()
+            if template:
+                NSColor.colorWithCalibratedWhite_alpha_(0.0, 1.0).set()
+            else:
+                fill_rgb = _bar_color_for_pct(pct, rgb, warn=warn, hot=hot, crit=crit)
+                r, g, b = fill_rgb[0] / 255.0, fill_rgb[1] / 255.0, fill_rgb[2] / 255.0
+                NSColor.colorWithCalibratedRed_green_blue_alpha_(r, g, b, 1.0).set()
             NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
                 NSMakeRect(pad, y, min(fill_w, track_w), bar_h), radius, radius
             ).fill()
@@ -406,7 +466,7 @@ def run_menubar() -> None:
         nsapp = getattr(app_obj, "_nsapp", None)
         status_item = getattr(nsapp, "nsstatusitem", None)
         if status_item is not None:
-            status_item.setVisible_(True)
+            _pin_status_item(status_item)
 
         if p is None:
             pct = None
@@ -427,7 +487,7 @@ def run_menubar() -> None:
             if state.get("status_key") != key:
                 state["status_key"] = key
                 # System color — NES brights are unreadable in the clock strip.
-                app_obj.title = f" {_title_quota_chip(p)}" if p else "AI"
+                app_obj.title = _title_quota_chip(p) if p else "AI"
                 _set_status_tooltip(app_obj, "")
                 try:
                     app_obj.icon = None
@@ -436,26 +496,24 @@ def run_menubar() -> None:
             return
 
         chip = _title_quota_chip(p) if p is not None else f"{letter} {int(round(pct))}%"
-        key = f"{focus}:{chip}:{pal['dark']}:v3"
-        app_obj.title = f" {chip}"
-        if p is not None:
-            _set_status_tooltip(app_obj, _title_quota_tooltip(p))
+        key = f"{focus}:{chip}:template:v5"
         if state.get("status_key") == key:
             return
         state["status_key"] = key
+        app_obj.title = chip
+        if p is not None:
+            _set_status_tooltip(app_obj, _title_quota_tooltip(p))
 
         path = _render_single_bar_icon(
             pct,
             rgb,
-            empty=pal["empty"],
-            warn=pal["warn"],
-            hot=pal["hot"],
-            crit=pal["crit"],
             filename="status.png",
+            template=True,
         )
         if path and path.exists():
             try:
-                app_obj.template = False
+                # Template images follow the menu bar's light or dark foreground.
+                app_obj.template = True
                 app_obj.icon = str(path)
             except Exception:
                 pass
@@ -492,107 +550,65 @@ def run_menubar() -> None:
             )
 
         if report is None:
-            add_enabled("Loading…")  # plain system color
+            add_enabled("Loading…")
         else:
-            add_enabled(f"Updated {datetime.now().strftime('%H:%M')}")
-            app.menu.add(None)
-
             if not report.providers:
                 add_enabled("No recent usage")
 
-            # ── Per-provider: system labels, colored bar + % only ──
-            for p in report.providers:
+            # One short row per provider. Windows, plan, and reset time
+            # open beside it when the pointer rests on the row.
+            order = {pid: index for index, pid in enumerate(FOCUS_ORDER)}
+            shown = sorted(
+                report.providers,
+                key=lambda provider: order.get(provider.provider.value, len(order)),
+            )
+
+            def add_child(parent, title: str) -> None:
+                child = rumps.MenuItem(title)
+                child.set_callback(noop)
+                parent.add(child)
+                callbacks.append(child)
+
+            for p in shown:
                 pct = _quota_of(p)
                 style = PROVIDER_STYLE.get(
                     p.provider.value,
-                    {"letter": "?", "rgb": (120, 140, 160)},
+                    {"letter": "?", "short": p.display_name},
                 )
-                brand = pal["brands"].get(p.provider.value, style["rgb"])
-                letter = style.get("letter") or "?"
+                short = str(style.get("short", p.display_name))
                 if pct is not None:
                     q = _display_quota(p) or {}
                     plan = q.get("plan") or ""
-                    label = (q.get("label") or "").replace(" limit", "").strip()
+                    label = _pretty_window_label(str(q.get("label") or ""))
                     burn = _burn_of(p)
-                    short = style.get("short", p.display_name)
-                    line = f"{short}    {pct:.0f}%"
-                    parts = [(f"{short}    ", None), (f"{pct:.0f}%", None)]
-
-                    item = add_enabled(line, parts=parts)
-                    bar_img = _render_single_bar_icon(
-                        pct,
-                        brand,
-                        empty=pal["empty"],
-                        warn=pal["warn"],
-                        hot=pal["hot"],
-                        crit=pal["crit"],
-                        filename=f"menu-{p.provider.value}.png",
-                        pt_w=30,
-                        pt_h=6,
-                    )
-                    if bar_img and bar_img.exists():
-                        try:
-                            item.set_icon(str(bar_img), dimensions=(30, 6), template=False)
-                        except Exception:  # noqa: BLE001
-                            pass
-
+                    if label:
+                        headline = f"{short}    {label} · {_remaining_pct(pct)}% left"
+                    else:
+                        headline = _quota_menu_line(short, pct)
+                    parent = add_enabled(headline)
+                    shown_resets: set[str] = set()
                     for w in q.get("windows") or []:
                         if w.get("used_percent") is None:
                             continue
-                        wp = float(w["used_percent"])
-                        w_label = str(w.get("label") or "Usage")
-                        w_line = f"{w_label}    {wp:.0f}% used · {100 - wp:.0f}% remaining"
-                        if w.get("resets_at"):
-                            try:
-                                reset_local = datetime.fromisoformat(
-                                    str(w["resets_at"]).replace("Z", "+00:00")
-                                ).astimezone()
-                                w_line += f" · resets {reset_local:%b %d, %H:%M %Z}"
-                            except ValueError:
-                                pass
-                        w_parts = [(w_line, None)]
-                        sub = rumps.MenuItem(w_line)
-                        sub.set_callback(noop)
-                        _set_colored_title(sub, w_parts, w_line)
-                        item.add(sub)
-                        callbacks.append(sub)
+                        w_label = _pretty_window_label(str(w.get("label") or "Usage"))
+                        w_line = _quota_menu_line(w_label, float(w["used_percent"]))
+                        reset_txt = _format_reset(w.get("resets_at"))
+                        if reset_txt:
+                            w_line += f" · {reset_txt}"
+                            shown_resets.add(reset_txt)
+                        add_child(parent, w_line)
                     if plan:
-                        item.add(rumps.MenuItem(f"Plan: {plan}"))
-                    reset = q.get("resets_at")
-                    if reset:
-                        try:
-                            d = datetime.fromisoformat(
-                                str(reset).replace("Z", "+00:00")
-                            ).astimezone()
-                            reset_txt = (
-                                f"    {label} resets {d.strftime('%b %d, %H:%M %Z')}"
-                                if label
-                                else f"    Resets {d.strftime('%b %d, %H:%M %Z')}"
-                            )
-                            sub = rumps.MenuItem(reset_txt)
-                            sub.set_callback(noop)
-                            item.add(sub)
-                            callbacks.append(sub)
-                        except ValueError:
-                            pass
-                    if burn is not None and burn.summary:
-                        burn_sub = rumps.MenuItem(f"    {burn.summary}")
-                        burn_sub.set_callback(noop)
-                        item.add(burn_sub)
-                        callbacks.append(burn_sub)
+                        add_child(parent, f"Plan    {plan}")
+                    reset_txt = _format_reset(q.get("resets_at"))
+                    if reset_txt and reset_txt not in shown_resets:
+                        prefix = f"{label} resets" if label else "Resets"
+                        add_child(parent, f"{prefix}    {reset_txt}")
+                    if burn is not None and burn.hits_before_reset and burn.summary:
+                        add_child(parent, burn.summary)
                 elif p.requests or p.total_tokens:
                     cost = f"  ·  ${p.cost_usd:.2f}" if p.cost_usd is not None else ""
                     add_enabled(
-                        f"{letter}  {p.display_name}  ·  "
-                        f"{p.requests:,} req  ·  {p.total_tokens:,} tok{cost}",
-                        parts=[
-                            (f"{letter}  ", brand),
-                            (f"{p.display_name}", None),
-                            (
-                                f"  ·  {p.requests:,} req  ·  {p.total_tokens:,} tok{cost}",
-                                None,
-                            ),
-                        ],
+                        f"{p.display_name}    {p.requests:,} req  ·  {p.total_tokens:,} tok{cost}"
                     )
             app.menu.add(None)
 
@@ -601,18 +617,16 @@ def run_menubar() -> None:
             focus_menu.set_callback(noop)
             callbacks.append(focus_menu)
 
-            for prov in report.providers:
+            for prov in sorted(
+                report.providers,
+                key=lambda provider: order.get(provider.provider.value, len(order)),
+            ):
                 pid = prov.provider.value
-                style = PROVIDER_STYLE.get(
-                    pid, {"short": pid, "letter": "?", "rgb": (120, 140, 160)}
-                )
-                brand = pal["brands"].get(pid, style["rgb"])
-                letter = style.get("letter") or "?"
+                style = PROVIDER_STYLE.get(pid, {"short": pid})
                 pct = _quota_of(prov)
                 label = str(style["short"])
                 if pct is not None:
-                    label += f"    {pct:.0f}%"
-                parts = None
+                    label = _quota_menu_line(label, pct)
 
                 def _make_cb(provider_id: str):
                     def _cb(_=None, _pid=provider_id) -> None:
@@ -622,8 +636,6 @@ def run_menubar() -> None:
 
                 sub = rumps.MenuItem(label)
                 sub.set_callback(_make_cb(pid))
-                if parts:
-                    _set_colored_title(sub, parts, label)
                 if state.get("display_focus") == pid or (
                     state["focus"] == "openai" and pid == "codex"
                 ):
@@ -779,19 +791,23 @@ def run_menubar() -> None:
             pending["error"] = None
             pending["ready"] = False
 
-        if error is not None:
-            state["error"] = error
-            app.title = " !"
-            rebuild_menu(state.get("report"), error=error)
-        else:
-            report = active_report(report, activity, now=time.time())
-            prefs["activity"] = activity
-            _save_prefs(prefs)
-            state["report"] = report
-            state["error"] = None
-            _apply_status(app, report, state["focus"])
-            rebuild_menu(report)
-            _check_quota_notifications(report)
+        try:
+            if error is not None:
+                state["error"] = error
+                app.title = " !"
+                rebuild_menu(state.get("report"), error=error)
+            else:
+                report = active_report(report, activity, now=time.time())
+                prefs["activity"] = activity
+                _save_prefs(prefs)
+                state["report"] = report
+                state["error"] = None
+                _apply_status(app, report, state["focus"])
+                rebuild_menu(report)
+                _check_quota_notifications(report)
+        except Exception as exc:  # noqa: BLE001
+            # A draw bug must not kill the rumps timer; the next poll retries.
+            state["error"] = str(exc)
 
     def background_loop() -> None:
         while True:
