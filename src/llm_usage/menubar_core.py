@@ -239,8 +239,11 @@ def quota_window_open(provider: ProviderReport, now: float) -> bool:
     for window in candidates:
         if not isinstance(window, dict):
             continue
+        raw_used = window.get("used_percent")
+        if raw_used is None:
+            continue
         try:
-            used = float(window.get("used_percent"))
+            used = float(raw_used)
         except (TypeError, ValueError):
             continue
         if not math.isfinite(used) or used <= 0:
@@ -290,8 +293,11 @@ def active_report(
             # Visibility still considers every open window below.
             windows = windows[:1]
         for key, window in [] if provider.meta.get("quota_stale") else windows:
+            raw_used = window.get("used_percent")
+            if raw_used is None:
+                continue
             try:
-                value = float(window.get("used_percent"))
+                value = float(raw_used)
                 if math.isfinite(value):
                     readings[f"quota:{key}"] = value
             except (TypeError, ValueError):
