@@ -31,11 +31,11 @@ The installer uses an editable `uv tool` install. If `llm-usage` is not on your 
 
 ## Menu bar
 
-The item shows one provider and its current quota, for example `Codex 80%`. Open the menu for the other active providers, their quota windows, and reset times. When none are shown, the item reads `AI` so the dashboard and **Refresh Now** remain available.
+The item shows one provider and its current quota, for example `Grok 8%`, beside a small usage mark. The mark is a template image, so it takes the same black or white as the other menu bar icons. Open the menu for one line per provider, such as `Grok    Weekly · 75% left`. Rest the pointer on that line to see its windows and reset time. When none are shown, the item reads `AI` so the dashboard and **Refresh Now** remain available.
 
-Codex stays visible while its current five-hour window has usage, even if you step away. After the window resets, it follows the recent-activity rule until new usage is reported. Other providers disappear after 30 minutes without an observed usage increase and return when usage changes. The menu checks for updates every 30 seconds; provider reporting can add some delay.
+A provider stays in the menu while one of its quota windows still has usage. A five-hour window keeps it up until that window resets. A weekly window keeps it up until that window resets, including after the five-hour window has already reset. One use, then a couple of hours away, stays on screen for as long as that usage remains in the window. After every open window reports `0%` or reaches its reset time, the provider follows the recent-activity rule until new usage is reported. Providers with no quota window disappear after 30 minutes without an observed usage increase and return when usage changes. The menu checks for updates every 30 seconds; provider reporting can add some delay.
 
-Codex shows the reported five-hour and weekly percentages, remaining allowance, and local reset times. It does not turn a short burst of use into a misleading daily pace estimate. The menu bar collects only small quota responses, without scanning session logs on each refresh.
+The hover menu shows Grok's weekly allowance, the Grok Build and Grok Chat split, and the local reset time. Codex shows the reported five-hour and weekly remaining amounts and their local reset times. It does not turn a short burst of use into a misleading daily pace estimate. The menu bar collects only small quota responses, without scanning session logs on each refresh.
 
 ## Dashboard and CLI
 

@@ -112,6 +112,26 @@ def test_doctor_ok_json():
     assert '"ok": true' in result.stdout or '"ok":true' in result.stdout
 
 
+def test_doctor_stale_quota_is_partial_json():
+    report = AggregateReport(
+        period_start=date(2026, 7, 1),
+        period_end=date(2026, 7, 7),
+        providers=[
+            ProviderReport(
+                provider=ProviderId.CLAUDE,
+                display_name="Claude Code",
+                source=SourceKind.SUBSCRIPTION,
+                meta={"quota_stale": True, "quota": {"used_percent": 57}},
+                notes=["Claude quota from cache (5-hour limit: 57%)"],
+            )
+        ],
+    )
+    with patch("llm_usage.cli.collect_all_cached", return_value=report):
+        result = runner.invoke(app, ["doctor", "--format", "json"])
+    assert result.exit_code == 1
+    assert "partial" in result.stdout
+
+
 def test_doctor_error_exit_one_json():
     report = AggregateReport(
         period_start=date(2026, 7, 1),

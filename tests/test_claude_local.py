@@ -2,7 +2,11 @@ import json
 from datetime import date
 from pathlib import Path
 
+import httpx
+
 import llm_usage.providers.claude as claude_module
+import llm_usage.quota as quota
+from llm_usage.config import Settings
 from llm_usage.providers.claude import _scan_local_logs
 
 
@@ -78,3 +82,104 @@ def test_scan_local_logs_reuses_cache_across_calls_and_windows(tmp_path: Path, m
     assert r1["requests"] == 1
     assert r2["requests"] == 1
     assert len(calls) == 1
+
+
+def _settings() -> Settings:
+    return Settings(_env_file=None)
+
+
+def test_expired_cached_quota_is_not_shown_as_live(monkeypatch):
+    monkeypatch.setattr(
+        claude_module,
+        "_read_claude_cred_meta",
+        lambda _p: {
+            "plan": "pro",
+            "access_token": "tok",
+            "source": "keychain",
+            "expires_at": 1,
+        },
+    )
+    monkeypatch.setattr(
+        claude_module,
+        "_fetch_oauth_usage_cached",
+        lambda _t: (_ for _ in ()).throw(
+            RuntimeError("OAuth token rejected (401) — re-login to Claude Code")
+        ),
+    )
+    quota.write_json_cache(
+        "claude_oauth_usage.json",
+        {
+            "five_hour": {
+                "utilization": 57.0,
+                "resets_at": "2026-08-02T19:49:59.682003+00:00",
+            },
+            "seven_day": {
+                "utilization": 34.0,
+                "resets_at": "2026-08-07T00:59:59.682018+00:00",
+            },
+        },
+    )
+    report = claude_module.collect_claude(
+        _settings(), date(2026, 10, 11), date(2026, 10, 11), quota_only=True
+    )
+    assert report.meta.get("quota") is None
+    assert any("expired" in e.lower() or "401" in e for e in report.errors)
+    assert not any("57%" in n for n in report.notes)
+
+
+def test_oauth_401_writes_cooldown_and_does_not_return_stale(monkeypatch):
+    class _Resp:
+        status_code = 401
+        headers: dict = {}
+
+        def raise_for_status(self):
+            raise httpx.HTTPStatusError(
+                "unauthorized",
+                request=httpx.Request("GET", "https://api.anthropic.com/api/oauth/usage"),
+                response=httpx.Response(401),
+            )
+
+        def json(self):
+            return {}
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, *a, **k):
+            return _Resp()
+
+    monkeypatch.setattr(httpx, "Client", _Client)
+    quota.atomic_write_json(
+        quota.cache_dir() / "claude_oauth_usage.json",
+        {
+            "_cached_at": 1.0,
+            "payload": {
+                "five_hour": {
+                    "utilization": 57.0,
+                    "resets_at": "2026-08-02T19:49:59+00:00",
+                }
+            },
+        },
+    )
+    raised = None
+    try:
+        claude_module._fetch_oauth_usage_cached("tok")
+    except RuntimeError as exc:
+        raised = str(exc)
+    assert raised is not None
+    assert "401" in raised
+    assert quota.cooldown_remaining("claude_oauth_usage.json") > 0
+
+    # A later poll during cooldown must not treat the August body as live.
+    try:
+        claude_module._fetch_oauth_usage_cached("tok")
+        raise AssertionError("cooldown should raise, not return stale usage")
+    except RuntimeError as exc:
+        assert "Rate limited" in str(exc)
