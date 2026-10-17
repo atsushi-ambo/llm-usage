@@ -105,7 +105,13 @@ def test_codex_remains_visible_until_five_hour_reset():
     assert not active_report(codex, activity, now=20001).providers
 
 
-def test_codex_stale_quota_does_not_keep_it_visible():
+def test_stale_quota_stays_visible_only_while_its_reset_is_ahead():
+    """A rate-limited provider keeps its last reading until that window resets.
+
+    Hiding every stale reading made Claude vanish on any 429/5xx while Codex
+    and Grok stayed on screen. A known future reset proves the reading is
+    from the current period; once it passes, the provider drops off.
+    """
     from datetime import datetime, timezone
 
     activity = {}
@@ -114,7 +120,17 @@ def test_codex_stale_quota_does_not_keep_it_visible():
         20000, timezone.utc
     ).isoformat()
     codex.providers[0].meta["quota_stale"] = True
-    assert not active_report(codex, activity, now=10000).providers
+    assert len(active_report(codex, activity, now=10000).providers) == 1
+    assert not active_report(codex, activity, now=20001).providers
+
+
+def test_stale_quota_without_reset_time_is_hidden():
+    """No reset time means nothing shows the reading isn't from a closed period."""
+    activity = {}
+    stale = report(88)
+    stale.providers[0].meta["quota"].pop("resets_at", None)
+    stale.providers[0].meta["quota_stale"] = True
+    assert not active_report(stale, activity, now=10000).providers
 
 
 def grok_report(pct=8.0, *, stale=False, windows=True):

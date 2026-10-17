@@ -206,6 +206,8 @@ def title_quota_tooltip(p: ProviderReport) -> str:
         bits.append(burn.summary)
     elif burn is not None and burn.hits_label and burn.hits_label not in ("idle",):
         bits.append(burn.hits_label)
+    if (p.meta or {}).get("quota_stale"):
+        bits.append("cached — live update pending")
     return " · ".join(bits)
 
 
@@ -230,10 +232,17 @@ def quota_window_open(provider: ProviderReport, now: float) -> bool:
 
     A single use stays on screen until that window resets, even if the
     provider is idle afterward. A window that has already reset does not
-    count. `used_percent` of 0 is an empty window. Stale quota does not count.
+    count. `used_percent` of 0 is an empty window.
+
+    Stale quota (last good reading, served while the live API is rate
+    limited or briefly failing) counts only when its window carries a reset
+    time that is still ahead — proof the reading belongs to the current
+    period. Hiding every stale reading made Claude vanish from the bar on
+    any transient error while Codex and Grok stayed put; the tooltip marks
+    such readings as cached instead. Stale readings with no reset time stay
+    hidden, since nothing shows they aren't from a closed period.
     """
-    if (provider.meta or {}).get("quota_stale"):
-        return False
+    stale = bool((provider.meta or {}).get("quota_stale"))
     quota = (provider.meta or {}).get("quota") or {}
     candidates = [quota, *(quota.get("windows") or [])]
     for window in candidates:
@@ -249,7 +258,7 @@ def quota_window_open(provider: ProviderReport, now: float) -> bool:
         if not math.isfinite(used) or used <= 0:
             continue
         pending = reset_still_ahead(window.get("resets_at"), now)
-        if pending is False:
+        if pending is False or (stale and pending is not True):
             continue
         return True
     return False
