@@ -110,10 +110,17 @@ def read_dashboard_session() -> dict[str, Any] | None:
     return read_json_cache_stale(_DASHBOARD_SESSION_FILE)
 
 
-def cooldown_remaining(name: str) -> float:
-    """Seconds left on a rate-limit cooldown marker (0 if none)."""
+def cooldown_remaining(name: str, *, tag: str | None = None) -> float:
+    """Seconds left on a rate-limit cooldown marker (0 if none).
+
+    With `tag`, a marker written under a different tag doesn't apply — e.g.
+    a 401 backoff recorded for one OAuth token is void once the user logs in
+    again and the token changes.
+    """
     data = _read_cache_file(f"{name}.cooldown")
     if data is None:
+        return 0.0
+    if tag is not None and data.get("tag") != tag:
         return 0.0
     until = data.get("until")
     if not isinstance(until, (int, float)):
@@ -121,11 +128,14 @@ def cooldown_remaining(name: str) -> float:
     return max(0.0, until - time.time())
 
 
-def write_cooldown(name: str, seconds: float) -> None:
+def write_cooldown(name: str, seconds: float, *, tag: str | None = None) -> None:
     """Remember that an endpoint is rate limited; skip requests until it expires."""
     path = cache_dir() / f"{name}.cooldown"
+    payload: dict[str, Any] = {"until": time.time() + max(0.0, seconds)}
+    if tag is not None:
+        payload["tag"] = tag
     try:
-        atomic_write_json(path, {"until": time.time() + max(0.0, seconds)})
+        atomic_write_json(path, payload)
     except OSError:
         pass
 

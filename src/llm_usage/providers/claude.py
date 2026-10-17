@@ -33,6 +33,17 @@ from llm_usage.quota import (
 )
 
 _CACHE_NAME = "claude_oauth_usage.json"
+# 401s are tracked per token so a fresh `claude` login isn't blocked by a
+# backoff recorded against the old, rejected token.
+_AUTH_COOLDOWN_NAME = "claude_oauth_auth.json"
+
+# Refresh on the same cadence as Codex and Grok, which fetch live on every
+# menu bar poll (menubar.REFRESH_SECONDS = 30). The cache only dedupes
+# near-simultaneous callers; rate limiting is handled by honoring 429
+# Retry-After, not by serving 15-minute-old numbers as current.
+_OAUTH_CACHE_TTL_S = 30.0
+# Used when a 429 carries no Retry-After header.
+_DEFAULT_RETRY_AFTER_S = 300.0
 
 
 def collect_claude(
@@ -94,10 +105,11 @@ def collect_claude(
         if cred_meta.get("source"):
             report.meta["auth_source"] = cred_meta["source"]
         token_ok = _token_still_valid(cred_meta)
-        if token_ok:
-            # A fresh login should not wait out a 401/429 backoff.
-            clear_cooldown(_CACHE_NAME)
-        else:
+        # No cooldown clearing here: doing it on every poll with a valid
+        # token defeated 429 backoff, so a rate-limited menu bar re-hit the
+        # endpoint every 30 s and stayed rate limited. A new login is
+        # handled by the per-token 401 marker instead.
+        if not token_ok:
             report.notes.append(
                 "Claude OAuth token looks expired — open Claude Code once to refresh, "
                 "or run `claude` login."
@@ -656,12 +668,21 @@ def _read_claude_cred_meta(path: Path) -> dict[str, Any]:
     return candidates[0]
 
 
+def _token_fingerprint(token: str) -> str:
+    """Stable, non-reversible id for a token (never store the token itself)."""
+    import hashlib
+
+    return hashlib.sha256(token.encode()).hexdigest()[:16]
+
+
 def _fetch_oauth_usage_cached(token: str) -> dict[str, Any]:
-    # Quota moves slowly; a longer cache keeps polling clients (menubar every
-    # 2 min) from tripping Anthropic's rate limit on this endpoint.
-    cached = read_json_cache(_CACHE_NAME, max_age_s=900)
+    cached = read_json_cache(_CACHE_NAME, max_age_s=_OAUTH_CACHE_TTL_S)
     if cached is not None:
         return cached
+
+    fingerprint = _token_fingerprint(token)
+    if cooldown_remaining(_AUTH_COOLDOWN_NAME, tag=fingerprint) > 0:
+        raise ReauthenticationRequired("OAuth token rejected (401) — re-login to Claude Code")
 
     # A prior 429 told us to back off — honor it instead of re-triggering it.
     remaining = cooldown_remaining(_CACHE_NAME)
@@ -679,17 +700,17 @@ def _fetch_oauth_usage_cached(token: str) -> dict[str, Any]:
     with httpx.Client(timeout=20.0) as client:
         resp = client.get("https://api.anthropic.com/api/oauth/usage", headers=headers)
         if resp.status_code == 401:
-            # Stop the menubar from hammering a dead token every 30s.
-            write_cooldown(_CACHE_NAME, 6 * 3600)
+            # Stop the menubar from hammering a dead token every 30s; a new
+            # token (fresh login) has a different fingerprint and skips this.
+            write_cooldown(_AUTH_COOLDOWN_NAME, 6 * 3600, tag=fingerprint)
             raise ReauthenticationRequired("OAuth token rejected (401) — re-login to Claude Code")
         if resp.status_code == 404:
             raise RuntimeError("OAuth usage not available for this account")
         if resp.status_code == 429:
-            retry_after = safe_float(resp.headers.get("retry-after")) or 1800.0
-            write_cooldown(_CACHE_NAME, retry_after + 30.0)
-            stale = read_json_cache_stale(_CACHE_NAME)
-            if stale is not None:
-                return stale
+            retry_after = safe_float(resp.headers.get("retry-after")) or _DEFAULT_RETRY_AFTER_S
+            write_cooldown(_CACHE_NAME, retry_after)
+            # Raise rather than return the last body: the caller then shows
+            # it explicitly as cached, instead of passing it off as live.
             raise RuntimeError(
                 f"Rate limited (429) — backing off {int(retry_after // 60) + 1} min"
             )
