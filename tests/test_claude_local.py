@@ -175,11 +175,26 @@ def test_oauth_401_writes_cooldown_and_does_not_return_stale(monkeypatch):
         raised = str(exc)
     assert raised is not None
     assert "401" in raised
-    assert quota.cooldown_remaining("claude_oauth_usage.json") > 0
+    fp = claude_module._token_fingerprint("tok")
+    assert quota.cooldown_remaining("claude_oauth_auth.json", tag=fp) > 0
 
     # A later poll during cooldown must not treat the August body as live.
     try:
         claude_module._fetch_oauth_usage_cached("tok")
         raise AssertionError("cooldown should raise, not return stale usage")
     except RuntimeError as exc:
-        assert "Rate limited" in str(exc)
+        assert "401" in str(exc)
+
+
+def test_new_token_is_not_blocked_by_old_tokens_401_cooldown():
+    """A fresh `claude` login must not wait out the previous token's backoff."""
+    quota.write_cooldown(
+        "claude_oauth_auth.json", 3600, tag=claude_module._token_fingerprint("old-tok")
+    )
+    fp_new = claude_module._token_fingerprint("new-tok")
+    assert quota.cooldown_remaining("claude_oauth_auth.json", tag=fp_new) == 0.0
+
+
+def test_token_fingerprint_does_not_contain_the_token():
+    fp = claude_module._token_fingerprint("sk-ant-oat01-SECRET")
+    assert "SECRET" not in fp and len(fp) == 16
