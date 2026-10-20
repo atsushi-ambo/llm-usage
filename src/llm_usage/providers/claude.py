@@ -556,6 +556,7 @@ def _oauth_block_to_meta(block: dict[str, Any], *, source: str) -> dict[str, Any
 
 def _read_claude_keychain_oauth() -> dict[str, Any] | None:
     """macOS: Claude Code stores the live OAuth blob in Keychain (file can be stale)."""
+    import getpass
     import platform
     import subprocess
 
@@ -566,6 +567,10 @@ def _read_claude_keychain_oauth() -> dict[str, Any] | None:
             [
                 "security",
                 "find-generic-password",
+                # Match Claude Code's account-scoped lookup. Service alone
+                # can select a different item's empty or obsolete credentials.
+                "-a",
+                getpass.getuser(),
                 "-s",
                 "Claude Code-credentials",
                 "-w",

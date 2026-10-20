@@ -51,13 +51,9 @@ jobs:
           cache: pip
 
       - name: Install package + pip-audit
-        run: pip install -e . pip-audit
+        run: |
+          python -m pip install --upgrade "setuptools>=83.0.0"
+          python -m pip install -e . pip-audit
 
-      # Report-only: this also flags pip/setuptools itself (build tooling
-      # pulled in by the venv, not a project dependency), which churns
-      # independently of any change here — a hard failure on it would gate
-      # merges on noise unrelated to the code. Findings are still visible
-      # in the Actions log for anyone who wants to check them.
       - name: pip-audit (scans the installed environment)
         run: pip-audit
-        continue-on-error: true

@@ -183,3 +183,38 @@ def test_oauth_401_writes_cooldown_and_does_not_return_stale(monkeypatch):
         raise AssertionError("cooldown should raise, not return stale usage")
     except RuntimeError as exc:
         assert "Rate limited" in str(exc)
+
+
+def test_keychain_lookup_selects_current_user(monkeypatch):
+    import getpass
+    import platform
+    import subprocess
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(getpass, "getuser", lambda: "test-user")
+
+    def lookup(args, **kwargs):
+        # A service-only lookup returns the empty entry that caused the bug.
+        account_scoped = args[2:4] == ["-a", "test-user"]
+        token = "synthetic-token" if account_scoped else None
+        return SimpleNamespace(
+            returncode=0, stdout=json.dumps({"claudeAiOauth": {"accessToken": token}})
+        )
+
+    monkeypatch.setattr(subprocess, "run", lookup)
+    assert claude_module._read_claude_keychain_oauth() == {"accessToken": "synthetic-token"}
+
+
+def test_keychain_lookup_does_not_use_another_users_credentials(monkeypatch):
+    import getpass
+    import platform
+    import subprocess
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(getpass, "getuser", lambda: "test-user")
+    monkeypatch.setattr(
+        subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=44, stdout="")
+    )
+    assert claude_module._read_claude_keychain_oauth() is None
