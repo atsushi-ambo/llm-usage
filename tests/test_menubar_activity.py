@@ -78,7 +78,7 @@ def test_stale_cache_increase_is_not_activity():
     active_report(report(23), activity, now=10000)
     stale = report(57)
     stale.providers[0].meta["quota_stale"] = True
-    assert not active_report(stale, activity, now=10100).providers
+    assert len(active_report(stale, activity, now=10100).providers) == 1
     assert len(active_report(report(23), activity, now=10200).providers) == 1
     assert activity["codex"]["last_active"] == 0
 
@@ -105,7 +105,7 @@ def test_codex_remains_visible_until_five_hour_reset():
     assert not active_report(codex, activity, now=20001).providers
 
 
-def test_codex_stale_quota_does_not_keep_it_visible():
+def test_codex_stale_quota_stays_as_unavailable():
     from datetime import datetime, timezone
 
     activity = {}
@@ -114,7 +114,7 @@ def test_codex_stale_quota_does_not_keep_it_visible():
         20000, timezone.utc
     ).isoformat()
     codex.providers[0].meta["quota_stale"] = True
-    assert not active_report(codex, activity, now=10000).providers
+    assert len(active_report(codex, activity, now=10000).providers) == 1
 
 
 def grok_report(pct=8.0, *, stale=False, windows=True):
@@ -150,10 +150,10 @@ def test_grok_stays_visible_while_weekly_usage_remains():
     assert not active_report(grok_report(0), activity, now=90000).providers
 
 
-def test_grok_without_quota_or_stale_quota_does_not_stay_up():
+def test_grok_unconfigured_hidden_but_stale_source_stays_as_unavailable():
     activity = {}
     assert not active_report(grok_report(None, windows=False), activity, now=10000).providers
-    assert not active_report(grok_report(8, stale=True), activity, now=10000).providers
+    assert len(active_report(grok_report(8, stale=True), activity, now=10000).providers) == 1
 
 
 def test_weekly_window_keeps_provider_after_five_hour_reset():
@@ -223,3 +223,36 @@ def test_claude_week_window_stays_after_five_hour_reset():
         ],
     )
     assert len(active_report(claude, activity, now=20000).providers) == 1
+
+
+def test_configured_failure_visible_without_manufacturing_activity():
+    from llm_usage.menubar_core import display_quota, provider_issue_label
+
+    aggregate = grok_report(None, windows=False)
+    p = aggregate.providers[0]
+    p.source = SourceKind.UNAVAILABLE
+    p.errors = ['Live Grok billing: auth rejected (401) — run grok login']
+    activity = {}
+    visible = active_report(aggregate, activity, now=10000)
+    assert visible.providers == [p]
+    assert provider_issue_label(p) == 'Usage unavailable'
+    assert display_quota(p) is None
+    assert activity['grok']['last_active'] == 0
+    p.errors.clear()
+    assert not active_report(aggregate, activity, now=10001).providers
+
+
+def test_stale_values_are_not_live_percentages_or_notifications():
+    from llm_usage.menubar_core import (
+        display_quota, provider_issue_label, quota_crossings,
+        title_quota_chip, title_quota_tooltip,
+    )
+
+    aggregate = grok_report(95, stale=True)
+    p = aggregate.providers[0]
+    assert active_report(aggregate, {}, now=10000).providers == [p]
+    assert display_quota(p) is None
+    assert provider_issue_label(p) == 'Usage unavailable (cached)'
+    assert title_quota_chip(p) == 'Grok'
+    assert 'Usage unavailable' in title_quota_tooltip(p)
+    assert quota_crossings(aggregate, {}) == []

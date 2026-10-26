@@ -40,6 +40,7 @@ from llm_usage.menubar_core import (
     pct_rgb,
     quota_crossings,
     quota_of,
+    provider_issue_label,
     save_prefs,
     title_quota_chip,
     title_quota_tooltip,
@@ -488,7 +489,7 @@ def run_menubar() -> None:
                 state["status_key"] = key
                 # System color — NES brights are unreadable in the clock strip.
                 app_obj.title = _title_quota_chip(p) if p else "AI"
-                _set_status_tooltip(app_obj, "")
+                _set_status_tooltip(app_obj, _title_quota_tooltip(p) if p else "")
                 try:
                     app_obj.icon = None
                 except Exception:
@@ -605,6 +606,10 @@ def run_menubar() -> None:
                         add_child(parent, f"{prefix}    {reset_txt}")
                     if burn is not None and burn.hits_before_reset and burn.summary:
                         add_child(parent, burn.summary)
+                elif provider_issue_label(p):
+                    parent = add_enabled(f"{short}    {provider_issue_label(p)}")
+                    for detail in (p.errors + p.notes)[:6]:
+                        add_child(parent, detail[:240])
                 elif p.requests or p.total_tokens:
                     cost = f"  ·  ${p.cost_usd:.2f}" if p.cost_usd is not None else ""
                     add_enabled(
