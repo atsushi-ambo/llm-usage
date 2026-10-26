@@ -413,6 +413,24 @@ def _collect_menubar_report(
     return slim_report_for_menubar(report)
 
 
+def _configure_notification_identity() -> bool:
+    """Identify unbundled installs to Cocoa without editing the Python environment."""
+    try:
+        from Foundation import NSBundle
+
+        bundle = NSBundle.mainBundle()
+        if not bundle.bundleIdentifier():
+            info = bundle.infoDictionary()
+            if info is None:
+                return False
+            info.setObject_forKey_("com.llm-usage.menubar", "CFBundleIdentifier")
+            info.setObject_forKey_("llm-usage", "CFBundleName")
+            info.setObject_forKey_("llm-usage", "CFBundleDisplayName")
+        return bool(bundle.bundleIdentifier())
+    except Exception:
+        return False  # unavailable notifications must not prevent usage display
+
+
 def run_menubar() -> None:
     """Start the menu bar app (blocks). Requires rumps on macOS."""
     try:
@@ -435,6 +453,7 @@ def run_menubar() -> None:
         "status_key": None,
     }
 
+    _configure_notification_identity()
     app = rumps.App("llm-usage", title="…", quit_button=None)
     # Use native menu typography and semantic system colors.
     activity = prefs.get("activity", {})

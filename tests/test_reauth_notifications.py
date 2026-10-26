@@ -115,3 +115,33 @@ def test_grok_auth_rejection_sets_signal_but_outage_does_not(monkeypatch):
     )
     r = xai.collect_xai(s, DAY, DAY, quota_only=True)
     assert not r.meta.get("reauth_required")
+
+
+def test_unbundled_app_gets_notification_identity_without_files(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    from llm_usage.menubar import _configure_notification_identity
+
+    info = {}
+
+    class Info:
+        def setObject_forKey_(self, value, key):
+            info[key] = value
+
+    bundle = SimpleNamespace(
+        bundleIdentifier=lambda: info.get("CFBundleIdentifier"),
+        infoDictionary=lambda: Info(),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "Foundation",
+        SimpleNamespace(
+            NSBundle=SimpleNamespace(mainBundle=lambda: bundle),
+        ),
+    )
+    assert _configure_notification_identity()
+    assert info["CFBundleIdentifier"] == "com.llm-usage.menubar"
+    assert info["CFBundleDisplayName"] == "llm-usage"
+    info["CFBundleIdentifier"] = "existing.bundle"
+    assert _configure_notification_identity()
+    assert info["CFBundleIdentifier"] == "existing.bundle"
