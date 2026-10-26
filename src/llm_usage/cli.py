@@ -44,7 +44,7 @@ from llm_usage.wizard import run_setup_wizard
 
 app = typer.Typer(
     name="llm-usage",
-    help="See all your LLM usage in one place (Claude, OpenAI, Grok, Cursor, Gemini).",
+    help="See all your LLM usage in one place (Claude, OpenAI, Grok, Cursor, Muse, Gemini).",
     no_args_is_help=False,
     add_completion=False,
 )
@@ -69,7 +69,7 @@ def main(
         None,
         "--provider",
         "-p",
-        help="Filter: claude, openai, codex, grok, cursor, gemini, openrouter",
+        help="Filter: claude, openai, codex, grok, cursor, muse, gemini, openrouter",
     ),
     fresh: bool = typer.Option(
         False,
@@ -482,6 +482,11 @@ def status_cmd() -> None:
             "ready" if settings.cursor_session_token else "—",
         ),
         (
+            "Muse",
+            "muse.ai cookie / Chrome import",
+            "ready" if settings.muse_cookie else ("auto" if settings.muse_chrome_import else "—"),
+        ),
+        (
             "Gemini",
             "API key",
             "ready" if settings.gemini_api_key else "—",
@@ -529,6 +534,25 @@ def status_cmd() -> None:
     console.print(
         "\n[dim]Copy .env.example → .env (or ~/.config/llm-usage/.env) and add keys.[/dim]"
     )
+
+
+@app.command("muse-connect")
+def muse_connect_cmd() -> None:
+    """Allow macOS Keychain access for importing Muse's Chrome session."""
+    import sys
+
+    from llm_usage.providers.muse import MuseError, _chrome_password
+
+    if sys.platform != "darwin":
+        console.print("Set MUSE_COOKIE in your private config file on this platform.")
+        raise typer.Exit(1)
+    console.print("macOS may ask to allow Chrome Safe Storage access for Muse session import.")
+    try:
+        _chrome_password(allow_prompt=True)
+    except (MuseError, OSError, ValueError):
+        console.print("Keychain access was not granted. Set MUSE_COOKIE or try again.")
+        raise typer.Exit(1) from None
+    console.print("Keychain access is available. Sign in at muse.ai in Chrome, then refresh llm-usage.")
 
 
 @app.command("doctor")
@@ -858,7 +882,7 @@ def _show(
         ]
         if not report.providers:
             console.print(f"[red]No provider matching[/red] {provider!r}")
-            console.print("[dim]Available providers: claude, openai, codex, grok, cursor, gemini, openrouter, cohere, mistral, replicate, huggingface[/dim]")
+            console.print("[dim]Available providers: claude, openai, codex, grok, cursor, muse, gemini, openrouter, cohere, mistral, replicate, huggingface[/dim]")
             raise typer.Exit(1)
 
     if fmt == OutputFormat.json:

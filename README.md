@@ -2,7 +2,7 @@
 
 A small, local view of your AI usage. See your limits in the macOS menu bar, open a dashboard for the full picture, or check from the terminal.
 
-It brings together Codex, Claude Code, Grok Build, Cursor, Gemini, OpenAI API, and other configured providers. The menu bar stays focused on providers you use; the dashboard shows usage, quota windows, and available cost data.
+It brings together Codex, Claude Code, Grok Build, Cursor, Muse, Gemini, OpenAI API, and other configured providers. The menu bar stays focused on providers you use; the dashboard shows usage, quota windows, and available cost data.
 
 ## Get started
 
@@ -67,9 +67,14 @@ cp .env.example ~/.config/llm-usage/.env
 | Claude Code | Local sessions and available usage windows; optional Anthropic Admin API |
 | Grok Build | Local logs and available credit data; optional xAI API |
 | Cursor | Admin API or session connection |
+| Muse | Weekly usage and reset time from muse.ai; Chrome session on macOS or `MUSE_COOKIE` |
 | Gemini | Local CLI logs; optional API connection |
 | OpenAI API | Organization usage and costs with an API key |
 | OpenRouter | Credit and spend data with an API key |
+
+For Muse, sign in at [muse.ai](https://muse.ai) in Chrome on your Mac. llm-usage reads only the Muse session cookie from Chrome and uses macOS Keychain to decrypt it in memory. Background refreshes do not show Keychain dialogs. If access is blocked, run `llm-usage muse-connect` once and approve the macOS prompt. Set `MUSE_CHROME_IMPORT=false` to disable import. For other browsers or platforms, set `MUSE_COOKIE` to the Cookie header of a signed-in muse.ai request in the private config file; never share or commit it. Session expiry requires signing in again.
+
+Muse reports the weekly percentage, reset time, and plan; llm-usage does not infer token totals or costs. This uses the website's undocumented settings request, so a website change may require an update. Muse Code CLI and Meta developer API usage are separate and are not included.
 
 The `.env.example` file lists the supported keys. llm-usage loads the config file above, not an `.env` in whichever project directory you happen to be using. For a temporary development file, set `LLM_USAGE_ENV_FILE` explicitly.
 

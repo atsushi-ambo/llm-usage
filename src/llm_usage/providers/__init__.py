@@ -11,6 +11,7 @@ from llm_usage.models import AggregateReport, ModelUsage, ProviderId, ProviderRe
 from llm_usage.providers.claude import collect_claude
 from llm_usage.providers.codex import collect_codex
 from llm_usage.providers.cursor import collect_cursor
+from llm_usage.providers.muse import collect_muse
 from llm_usage.providers.gemini import collect_gemini
 from llm_usage.providers.openai_provider import collect_openai
 from llm_usage.providers.openrouter import collect_openrouter
@@ -34,8 +35,8 @@ from llm_usage.serialize import report_to_dict
 DEFAULT_SNAPSHOT_TTL_S = 90.0
 
 # Collectors are independent HTTP/log work; wall-clock ≈ slowest, not sum.
-# 12 = 11 built-ins + custom plugins (quota_only skips openai).
-_COLLECT_WORKERS = 12
+# 13 = 12 built-ins + custom plugins (quota_only skips openai).
+_COLLECT_WORKERS = 13
 
 # In-process single-flight so two overlapping collect_all_cached() calls
 # (dashboard double-click, two tabs, menubar+CLI in the same process) share
@@ -85,6 +86,7 @@ def collect_all(
         fut_cursor = pool.submit(
             collect_cursor, settings, start, end, quota_only=quota_only
         )
+        fut_muse = pool.submit(collect_muse, settings, start, end, quota_only=quota_only)
         fut_gemini = pool.submit(
             collect_gemini, settings, start, end, quota_only=quota_only
         )
@@ -113,6 +115,7 @@ def collect_all(
             openai = fut_openai.result()
         xai = fut_xai.result()
         cursor = fut_cursor.result()
+        muse = fut_muse.result()
         gemini = fut_gemini.result()
         openrouter = fut_openrouter.result()
         cohere = fut_cohere.result()
@@ -130,6 +133,7 @@ def collect_all(
         openai_family,
         xai,
         cursor,
+        muse,
         gemini,
         openrouter,
         cohere,

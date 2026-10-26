@@ -50,6 +50,7 @@ def test_collect_all_runs_collectors_concurrently():
         patch("llm_usage.providers.collect_openai", side_effect=slow_collect),
         patch("llm_usage.providers.collect_xai", side_effect=slow_collect),
         patch("llm_usage.providers.collect_cursor", side_effect=slow_collect),
+        patch("llm_usage.providers.collect_muse", side_effect=slow_collect),
         patch("llm_usage.providers.collect_gemini", side_effect=slow_collect),
         patch("llm_usage.providers.collect_openrouter", side_effect=slow_collect),
         patch("llm_usage.providers.collect_cohere", side_effect=slow_collect),
@@ -62,11 +63,11 @@ def test_collect_all_runs_collectors_concurrently():
         report = collect_all(settings, days=7)
     elapsed = time.monotonic() - t0
 
-    # 10 cards: claude + merged openai/codex + xai + cursor + gemini + openrouter
+    # 11 cards: claude + merged openai/codex + xai + cursor + muse + gemini + openrouter
     # + cohere + mistral + replicate + huggingface
-    assert len(report.providers) == 10
-    # 11 collectors start near-simultaneously (openai + codex both run; merge after).
-    assert len(started) == 11
+    assert len(report.providers) == 11
+    # 12 collectors start near-simultaneously (openai + codex both run; merge after).
+    assert len(started) == 12
     span = max(started) - min(started)
     assert span < 0.1, f"starts were staggered over {span:.3f}s — looks sequential"
     # Sequential would be ~11 × 0.12 ≈ 1.3s; concurrent ≈ 0.12s + overhead.

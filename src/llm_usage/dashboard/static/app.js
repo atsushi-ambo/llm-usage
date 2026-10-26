@@ -4,6 +4,7 @@ const COLORS = {
   codex: '#3ddc8a',
   grok: '#9b8cff',
   cursor: '#5b9dff',
+  muse: '#d980b4',
   gemini: '#e8c14a',
   openrouter: '#2dd4c0',
   cohere: '#3ba3e8',
@@ -25,7 +26,7 @@ function esc(s) {
   return String(s).replace(/[&<>"']/g, (c) => ESC_MAP[c]);
 }
 const KNOWN_PROVIDERS = new Set([
-  'claude', 'openai', 'codex', 'grok', 'cursor', 'gemini', 'openrouter',
+  'claude', 'openai', 'codex', 'grok', 'cursor', 'muse', 'gemini', 'openrouter',
   'cohere', 'mistral', 'replicate', 'huggingface',
 ]);
 function safeProviderClass(p) {
@@ -37,7 +38,7 @@ const ALLOWED_LINK_HOSTS = new Set([
   'console.x.ai', 'x.ai', 'grok.com', 'www.grok.com',
   'cursor.com', 'www.cursor.com',
   'aistudio.google.com',
-  'openrouter.ai',
+  'openrouter.ai', 'muse.ai',
   'cohere.com', 'dashboard.cohere.com',
   'mistral.ai', 'console.mistral.ai',
   'replicate.com',

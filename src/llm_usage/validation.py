@@ -182,6 +182,7 @@ def get_provider_setup_hint(provider: str) -> str:
         "openai": "Get org key from OpenAI Platform → Settings → Organization",
         "xai": "Get API key from x.ai console or management API",
         "cursor": "Get API key from Cursor Dashboard → API Keys or browser session token",
+        "muse": "Sign in at muse.ai in Chrome on macOS, or set MUSE_COOKIE",
         "gemini": "Get API key from Google AI Studio → Get API Key",
         "openrouter": "Get API key from openrouter.ai/keys",
         "cohere": "Get API key from cohere.com/dashboard",

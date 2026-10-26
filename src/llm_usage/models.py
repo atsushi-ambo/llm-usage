@@ -19,6 +19,7 @@ class ProviderId(str, Enum):
     CODEX = "codex"
     GROK = "grok"
     CURSOR = "cursor"
+    MUSE = "muse"
     GEMINI = "gemini"
     OPENROUTER = "openrouter"
     COHERE = "cohere"
