@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import TypedDict
 
 from llm_usage.burnrate import BurnProjection, project_from_quota
-from llm_usage.models import AggregateReport, ProviderId, ProviderReport
+from llm_usage.models import AggregateReport, ProviderId, ProviderReport, SourceKind
 from llm_usage.quota import atomic_write_json, quota_windows, reset_still_ahead
 
 RGB = tuple[int, int, int]
@@ -133,11 +133,38 @@ def quota_crossings(
 
 def provider_issue_label(p: ProviderReport) -> str | None:
     """Keep failed configured sources visible without claiming a live quota."""
+    if p.meta.get("reauth_required"):
+        return "Sign-in required"
     if p.meta.get("quota_stale"):
         return "Usage unavailable (cached)"
     if p.errors:
         return "Usage unavailable"
     return None
+
+
+def reauth_notifications(
+    report: AggregateReport, notified: dict, *, now: float,
+) -> list[tuple[str, str]]:
+    """One reminder per failed source per day, rearmed after confirmed recovery.
+
+    Persist `notified` with preferences to avoid repeats across app restarts.
+    Only explicit auth failures count; outages and rate limits never trigger it.
+    """
+    messages = []
+    for provider in report.providers:
+        pid = provider.provider.value
+        if provider.meta.get("reauth_required"):
+            previous = notified.get(pid)
+            if (isinstance(previous, (int, float)) and math.isfinite(previous)
+                    and 0 <= now - previous < 86400):
+                continue
+            short = str(PROVIDER_STYLE.get(pid, {}).get("short") or provider.display_name)
+            messages.append((pid, short))
+            notified[pid] = now
+        elif (provider.source != SourceKind.UNAVAILABLE and not provider.errors
+              and not provider.meta.get("quota_stale")):
+            notified.pop(pid, None)
+    return messages
 
 
 def display_quota(p: ProviderReport) -> dict | None:

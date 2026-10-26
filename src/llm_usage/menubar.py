@@ -41,6 +41,7 @@ from llm_usage.menubar_core import (
     quota_crossings,
     quota_of,
     provider_issue_label,
+    reauth_notifications,
     save_prefs,
     title_quota_chip,
     title_quota_tooltip,
@@ -439,6 +440,25 @@ def run_menubar() -> None:
     activity = prefs.get("activity", {})
     if not isinstance(activity, dict):
         activity = {}
+    auth_notified = prefs.get("auth_notifications", {})
+    if not isinstance(auth_notified, dict):
+        auth_notified = {}
+
+    def check_auth_notifications(report: AggregateReport) -> None:
+        before = dict(auth_notified)
+        for pid, short in reauth_notifications(report, auth_notified, now=time.time()):
+            try:
+                rumps.notification(
+                    title=f"{short} — 再ログインが必要です",
+                    subtitle="llm-usage",
+                    message="使用量を取得できません。該当サービスで再ログインしてください。",
+                )
+            except Exception:  # notifications are best effort
+                if pid in before:
+                    auth_notified[pid] = before[pid]
+                else:
+                    auth_notified.pop(pid, None)
+        prefs["auth_notifications"] = auth_notified
 
     # Keep strong refs so callbacks aren't GC'd
     callbacks: list = []
@@ -802,6 +822,7 @@ def run_menubar() -> None:
                 app.title = " !"
                 rebuild_menu(state.get("report"), error=error)
             else:
+                check_auth_notifications(report)
                 report = active_report(report, activity, now=time.time())
                 prefs["activity"] = activity
                 _save_prefs(prefs)

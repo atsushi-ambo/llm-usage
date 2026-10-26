@@ -37,6 +37,10 @@ class MuseError(Exception):
     """Only fixed, non-sensitive messages may be surfaced to users."""
 
 
+class MuseLoginRequired(MuseError):
+    """The server explicitly rejected the existing Muse session."""
+
+
 def _decrypt_cookie(encrypted: bytes, password: bytes, host: str, version: int) -> str:
     if not encrypted.startswith(b"v10"):
         raise MuseError("Unsupported Chrome cookie encryption. Use MUSE_COOKIE instead.")
@@ -243,6 +247,11 @@ class _Website:
             timeout=min(6, remaining_time),
             follow_redirects=False,
         ) as response:
+            if response.status_code == 401 or (
+                response.is_redirect
+                and httpx.URL(response.headers.get("location", "")).host == "auth.muse.ai"
+            ):
+                raise MuseLoginRequired("Muse session expired. Sign in at muse.ai in Chrome and refresh.")
             if response.status_code in (301, 302, 303, 307, 308, 401, 403):
                 raise MuseError(
                     "Muse session expired or was rejected. Sign in at muse.ai in Chrome and refresh."
@@ -398,6 +407,8 @@ def collect_muse(
             if last_error:
                 raise last_error
     except MuseError as exc:
+        if isinstance(exc, MuseLoginRequired):
+            report.meta["reauth_required"] = True
         report.errors.append(str(exc))
     except (httpx.HTTPError, OSError, ValueError):
         # Never include exceptions, response bodies, cookies or subprocess stderr.
