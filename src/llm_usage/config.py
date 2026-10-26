@@ -122,6 +122,14 @@ class Settings(BaseSettings):
     cursor_api_key: str | None = Field(default=None, alias="CURSOR_API_KEY")
     cursor_session_token: str | None = Field(default=None, alias="CURSOR_SESSION_TOKEN")
 
+    # Muse personal agent (muse.ai), separate from Muse Code / Meta API keys.
+    muse_cookie: str | None = Field(default=None, alias="MUSE_COOKIE", repr=False)
+    muse_chrome_import: bool = Field(default=True, alias="MUSE_CHROME_IMPORT")
+    muse_chrome_dir: Path = Field(
+        default_factory=lambda: Path.home() / "Library/Application Support/Google/Chrome",
+        alias="MUSE_CHROME_DIR",
+    )
+
     # Gemini
     gemini_api_key: str | None = Field(default=None, alias="GEMINI_API_KEY")
     google_cloud_project: str | None = Field(default=None, alias="GOOGLE_CLOUD_PROJECT")

@@ -121,6 +121,11 @@ def test_collect_all_quota_only_skips_openai_platform(monkeypatch):
     )
     monkeypatch.setattr(
         providers_module,
+        "collect_muse",
+        lambda s, a, b, quota_only=False: _empty(ProviderId.MUSE, a, b),
+    )
+    monkeypatch.setattr(
+        providers_module,
         "collect_gemini",
         lambda s, a, b, quota_only=False: _empty(ProviderId.GEMINI, a, b),
     )
