@@ -118,6 +118,8 @@ def quota_crossings(
     back below the lowest threshold (e.g. it reset)."""
     crossings: list[tuple[str, str, float, int]] = []
     for p in report.providers:
+        if p.meta.get("quota_stale"):
+            continue
         for label, pct in quota_windows(p):
             key = (p.provider.value, label)
             crossed = max((t for t in NOTIFY_THRESHOLDS if pct >= t), default=None)
@@ -129,6 +131,15 @@ def quota_crossings(
     return crossings
 
 
+def provider_issue_label(p: ProviderReport) -> str | None:
+    """Keep failed configured sources visible without claiming a live quota."""
+    if p.meta.get("quota_stale"):
+        return "Usage unavailable (cached)"
+    if p.errors:
+        return "Usage unavailable"
+    return None
+
+
 def display_quota(p: ProviderReport) -> dict | None:
     """Quota dict to use for the provider's headline %/reset in the menu bar.
 
@@ -137,6 +148,8 @@ def display_quota(p: ProviderReport) -> dict | None:
     top-level 7-day headline but includes a five_hour window, prefer that
     for the clock-adjacent glance — 5-hour is what blocks you next.
     """
+    if p.meta.get("quota_stale"):
+        return None
     q = (p.meta or {}).get("quota") or {}
     if q.get("used_percent") is None and not q.get("windows"):
         return None
@@ -197,7 +210,8 @@ def title_quota_tooltip(p: ProviderReport) -> str:
     short = str(style.get("short") or "AI")
     pct = quota_of(p)
     if pct is None:
-        return short
+        issue = provider_issue_label(p)
+        return f"{short} · {issue}" if issue else short
     bits = [f"{short} {int(round(pct))}% used"]
     q = display_quota(p) or {}
     label = str(q.get("label") or "").replace(" limit", "").strip()
@@ -318,7 +332,7 @@ def active_report(
         )
         # Missing data must not erase a baseline and manufacture activity on recovery.
         activity[pid] = {"version": 2, "readings": {**old, **readings}, "last_active": last_active}
-        if quota_window_open(provider, now) or (
+        if provider_issue_label(provider) or quota_window_open(provider, now) or (
             last_active and 0 <= now - last_active < timeout
         ):
             visible.append(provider)
