@@ -19,7 +19,7 @@ from llm_usage.models import (
     ProviderReport,
     SourceKind,
 )
-from llm_usage.providers.base import parse_iso_date, safe_error_str, safe_float, safe_int
+from llm_usage.providers.base import ReauthenticationRequired, parse_iso_date, safe_error_str, safe_float, safe_int
 
 _BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits"
 
@@ -55,6 +55,8 @@ def collect_xai(
         report.notes.append(str(exc))
     except Exception as exc:  # noqa: BLE001
         report.errors.append(f"Live Grok billing: {safe_error_str(exc)}")
+        if isinstance(exc, ReauthenticationRequired):
+            report.meta["reauth_required"] = True
 
     # 2) Local inference logs for token totals (skipped in quota_only / menubar)
     build: dict[str, Any] = {}
@@ -256,8 +258,8 @@ def _fetch_live_credits(home: Path) -> dict[str, Any] | None:
     }
     with httpx.Client(timeout=20.0, follow_redirects=True) as client:
         resp = client.get(_BILLING_URL, headers=headers)
-        if resp.status_code in (401, 403):
-            raise RuntimeError(
+        if resp.status_code == 401:
+            raise ReauthenticationRequired(
                 f"Grok auth rejected ({resp.status_code}) — run `grok login` again"
             )
         resp.raise_for_status()

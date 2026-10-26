@@ -8,6 +8,10 @@ from typing import Any
 import httpx
 
 
+class ReauthenticationRequired(RuntimeError):
+    """A provider explicitly rejected its existing login credentials."""
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 

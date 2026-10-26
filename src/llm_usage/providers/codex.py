@@ -139,6 +139,8 @@ def collect_codex(
             elif plan:
                 report.notes.append(f"Live Codex plan: {plan}")
         except Exception as exc:  # noqa: BLE001
+            if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 401:
+                report.meta["reauth_required"] = True
             report.errors.append(f"Codex quota API: {safe_error_str(exc)}")
     elif not (root / "sessions").exists():
         report.notes.append(

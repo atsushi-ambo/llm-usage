@@ -20,7 +20,7 @@ from llm_usage.models import (
     SourceKind,
 )
 from llm_usage.pricing import estimate_cost
-from llm_usage.providers.base import parse_iso_date, safe_error_str, safe_float, safe_int
+from llm_usage.providers.base import ReauthenticationRequired, parse_iso_date, safe_error_str, safe_float, safe_int
 from llm_usage.quota import (
     claude_quota_from_oauth,
     clear_cooldown,
@@ -105,7 +105,7 @@ def collect_claude(
         plan = cred_meta.get("plan") or "Claude Code"
         try:
             if not token_ok:
-                raise RuntimeError(
+                raise ReauthenticationRequired(
                     "OAuth token expired — open Claude Code once to refresh, "
                     "or run `claude` login"
                 )
@@ -120,6 +120,8 @@ def collect_claude(
                 report.notes.append("Claude OAuth usage returned (no current quota window)")
         except Exception as exc:  # noqa: BLE001
             # Still surface plan from credentials if we have local usage
+            if isinstance(exc, ReauthenticationRequired):
+                report.meta["reauth_required"] = True
             cached = read_json_cache_stale(_CACHE_NAME)
             if not _apply_claude_quota(
                 report,
@@ -679,7 +681,7 @@ def _fetch_oauth_usage_cached(token: str) -> dict[str, Any]:
         if resp.status_code == 401:
             # Stop the menubar from hammering a dead token every 30s.
             write_cooldown(_CACHE_NAME, 6 * 3600)
-            raise RuntimeError("OAuth token rejected (401) — re-login to Claude Code")
+            raise ReauthenticationRequired("OAuth token rejected (401) — re-login to Claude Code")
         if resp.status_code == 404:
             raise RuntimeError("OAuth usage not available for this account")
         if resp.status_code == 429:

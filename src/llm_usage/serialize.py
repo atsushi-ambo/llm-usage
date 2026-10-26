@@ -23,7 +23,7 @@ RAW_META_KEYS = {
 
 # Meta keys the menubar actually reads for bars / labels.
 _MENUBAR_META_KEYS = frozenset(
-    {"quota", "quota_stale", "plan_type", "console_url", "billing_source"}
+    {"quota", "quota_stale", "plan_type", "console_url", "billing_source", "reauth_required"}
 )
 _QUOTA_KEYS = frozenset(
     {
