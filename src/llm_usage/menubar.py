@@ -684,19 +684,13 @@ def run_menubar() -> None:
                         def _signin_cb(_=None, _pid=p.provider.value, _action=action) -> None:
                             start_signin(_pid, _action)
 
-                        parent = add_enabled(
+                        # A row with a submenu ignores clicks, so this one has none.
+                        add_enabled(
                             f"{short}    {provider_issue_label(p)} — click to sign in",
                             _signin_cb,
                         )
-                        sign_in = rumps.MenuItem(
-                            "Open login in Terminal…" if action[0] == "terminal"
-                            else "Open login page…"
-                        )
-                        sign_in.set_callback(_signin_cb)
-                        parent.add(sign_in)
-                        callbacks.append(sign_in)
-                    else:
-                        parent = add_enabled(f"{short}    {provider_issue_label(p)}")
+                        continue
+                    parent = add_enabled(f"{short}    {provider_issue_label(p)}")
                     for detail in (p.errors + p.notes)[:6]:
                         add_child(parent, detail[:240])
                 elif p.requests or p.total_tokens:

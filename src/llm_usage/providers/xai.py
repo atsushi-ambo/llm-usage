@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import httpx
 
-from llm_usage.config import Settings
+from llm_usage.config import Settings, atomic_write_text
 from llm_usage.logcache import scan_with_cache
 from llm_usage.models import (
     DailyPoint,
@@ -22,6 +22,7 @@ from llm_usage.models import (
 from llm_usage.providers.base import ReauthenticationRequired, parse_iso_date, safe_error_str, safe_float, safe_int
 
 _BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits"
+_OIDC_ISSUER = "https://auth.x.ai"
 
 
 def collect_xai(
@@ -218,7 +219,7 @@ def _apply_billing_quota(
     report.notes.insert(0, note)
 
 
-def _read_grok_auth_token(home: Path) -> str | None:
+def _read_grok_auth_token(home: Path, *, force_refresh: bool = False) -> str | None:
     path = home / "auth.json"
     if not path.exists():
         return None
@@ -228,13 +229,106 @@ def _read_grok_auth_token(home: Path) -> str | None:
         return None
     if not isinstance(data, dict):
         return None
-    # Prefer newest-looking entry with a key
-    for _k, entry in data.items():
+    # Keep the CLI file's entry order when choosing credentials.
+    for name, entry in data.items():
         if isinstance(entry, dict):
             tok = entry.get("key") or entry.get("access_token") or entry.get("accessToken")
             if tok:
+                if (
+                    entry.get("auth_mode") == "oidc"
+                    and entry.get("oidc_issuer") == _OIDC_ISSUER
+                    and isinstance(entry.get("refresh_token"), str)
+                    and entry["refresh_token"]
+                    and isinstance(entry.get("oidc_client_id"), str)
+                    and entry["oidc_client_id"]
+                    and (force_refresh or _grok_token_expiring(entry))
+                ):
+                    return _refresh_grok_auth_token(path, name, entry)
                 return str(tok)
     return None
+
+
+def _grok_token_expiring(entry: dict[str, Any]) -> bool:
+    try:
+        expires = datetime.fromisoformat(str(entry.get("expires_at", "")).replace("Z", "+00:00"))
+    except ValueError:
+        return False  # Missing/invalid expiry still gets a refresh on billing 401.
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    return expires <= datetime.now(timezone.utc) + timedelta(minutes=2)
+
+
+def _saved_grok_token_if_rotated(path: Path, name: str, entry: dict[str, Any]) -> str | None:
+    try:
+        saved = json.loads(path.read_text(encoding="utf-8")).get(name)
+    except (OSError, ValueError, AttributeError):
+        return None
+    if not isinstance(saved, dict) or saved.get("refresh_token") == entry["refresh_token"]:
+        return None
+    token = saved.get("key") or saved.get("access_token") or saved.get("accessToken")
+    return token if isinstance(token, str) and token else None
+
+
+def _refresh_grok_auth_token(path: Path, name: str, entry: dict[str, Any]) -> str:
+    if entry.get("oidc_issuer") != _OIDC_ISSUER:
+        raise RuntimeError("Unsupported Grok OIDC issuer")
+    endpoint = f"{_OIDC_ISSUER}/oauth2/token"
+    with httpx.Client(timeout=20.0, follow_redirects=False) as client:
+        resp = client.post(
+            endpoint,
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": entry["refresh_token"],
+                "client_id": entry["oidc_client_id"],
+            },
+        )
+        if resp.status_code in (400, 401):
+            # The CLI may have rotated the refresh token while this request ran.
+            current = _saved_grok_token_if_rotated(path, name, entry)
+            if current:
+                return current
+            raise ReauthenticationRequired("Grok token refresh rejected — run `grok login` again")
+        if not resp.is_success:
+            # safe_error_str includes HTTP error bodies: never expose OAuth payloads.
+            httpx.Response(resp.status_code, request=httpx.Request("POST", endpoint)).raise_for_status()
+        body = resp.json()
+
+    if not isinstance(body, dict):
+        raise RuntimeError("Unexpected Grok token refresh response")
+    token = body.get("access_token")
+    refresh = body.get("refresh_token", entry["refresh_token"])
+    expires_in = body.get("expires_in")
+    if (
+        not isinstance(token, str) or not token
+        or not isinstance(refresh, str) or not refresh
+        or isinstance(expires_in, bool) or not isinstance(expires_in, (int, float))
+        or not expires_in > 0
+    ):
+        raise RuntimeError("Unexpected Grok token refresh response")
+    try:
+        expires = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+    except (OverflowError, ValueError):
+        raise RuntimeError("Invalid Grok token lifetime") from None
+
+    # The CLI may have refreshed while the request was in flight. Preserve its
+    # current entries/fields, and prefer its credentials if the refresh token changed.
+    current = json.loads(path.read_text(encoding="utf-8"))
+    saved = current.get(name) if isinstance(current, dict) else None
+    if not isinstance(saved, dict):
+        raise RuntimeError("Grok auth entry changed during refresh")
+    if saved.get("refresh_token") != entry["refresh_token"]:
+        current_token = saved.get("key") or saved.get("access_token") or saved.get("accessToken")
+        if not isinstance(current_token, str) or not current_token:
+            raise RuntimeError("Grok auth entry changed during refresh")
+        return current_token
+    saved.update(
+        key=token,
+        refresh_token=refresh,
+        expires_at=expires.isoformat().replace("+00:00", "Z"),
+    )
+    # Shared helper creates a 0600 temp file alongside auth.json, then os.replace.
+    atomic_write_text(path, json.dumps(current, indent=2) + "\n")
+    return token
 
 
 class _GrokNotLoggedIn(RuntimeError):
@@ -258,6 +352,11 @@ def _fetch_live_credits(home: Path) -> dict[str, Any] | None:
     }
     with httpx.Client(timeout=20.0, follow_redirects=True) as client:
         resp = client.get(_BILLING_URL, headers=headers)
+        if resp.status_code == 401:
+            refreshed_token = _read_grok_auth_token(home, force_refresh=True)
+            if refreshed_token and refreshed_token != token:
+                headers["Authorization"] = f"Bearer {refreshed_token}"
+                resp = client.get(_BILLING_URL, headers=headers)
         if resp.status_code == 401:
             raise ReauthenticationRequired(
                 f"Grok auth rejected ({resp.status_code}) — run `grok login` again"

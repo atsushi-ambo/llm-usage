@@ -19,7 +19,7 @@ def provider(pid: ProviderId, *, reauth: bool) -> ProviderReport:
     [
         (ProviderId.CLAUDE, ("terminal", "claude /login")),
         (ProviderId.CODEX, ("terminal", "codex login")),
-        (ProviderId.GROK, ("terminal", "grok login")),
+        (ProviderId.GROK, ("terminal", "grok login --oauth")),
         (ProviderId.MUSE, ("url", "https://muse.ai")),
     ],
 )

@@ -149,7 +149,7 @@ def provider_issue_label(p: ProviderReport) -> str | None:
 SIGNIN_ACTIONS: dict[str, tuple[str, str]] = {
     "claude": ("terminal", "claude /login"),
     "codex": ("terminal", "codex login"),
-    "grok": ("terminal", "grok login"),
+    "grok": ("terminal", "grok login --oauth"),
     "muse": ("url", "https://muse.ai"),
 }
 
