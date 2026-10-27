@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 from llm_usage.burnrate import BurnProjection, project_from_quota
 from llm_usage.models import AggregateReport, ProviderId, ProviderReport, SourceKind
@@ -31,6 +33,28 @@ NOTIFY_THRESHOLDS = (70, 90)
 
 # Default: Grok in the menu bar (user can switch)
 DEFAULT_FOCUS = "grok"
+
+
+@dataclass(frozen=True)
+class LoginAction:
+    kind: Literal["browser", "terminal"]
+    args: tuple[str, ...]
+
+
+def reauth_login_action(data: object = None) -> LoginAction | None:
+    """Resolve notification data using only fixed, trusted login actions."""
+    if not isinstance(data, Mapping):
+        return None
+    pid = data.get("provider")
+    if not isinstance(pid, str):
+        return None
+    return {
+        "muse": LoginAction("browser", ("https://muse.ai/",)),
+        "claude": LoginAction("terminal", ("claude", "auth", "login")),
+        "codex": LoginAction("terminal", ("codex", "login")),
+        "grok": LoginAction("terminal", ("grok", "login", "--oauth")),
+    }.get(pid)
+
 
 # Dashboard jewel tones, darkened so 13pt type and bars read on a light
 # NSMenu. Dark mode brightens ~22%. Same hues as the web UI.

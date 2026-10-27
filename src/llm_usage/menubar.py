@@ -8,6 +8,7 @@ lives in `menubar_core`, where it is type-checked and unit-tested.
 
 from __future__ import annotations
 
+import shlex
 import subprocess
 import tempfile
 import threading
@@ -21,6 +22,7 @@ from llm_usage.menubar_core import (
     active_report,
     DEFAULT_FOCUS,
     FOCUS_ORDER,
+    LoginAction,
     NOTIFY_THRESHOLDS,
     PREFS_PATH,
     PROVIDER_STYLE,
@@ -42,6 +44,7 @@ from llm_usage.menubar_core import (
     quota_of,
     provider_issue_label,
     reauth_notifications,
+    reauth_login_action,
     save_prefs,
     title_quota_chip,
     title_quota_tooltip,
@@ -431,6 +434,61 @@ def _configure_notification_identity() -> bool:
         return False  # unavailable notifications must not prevent usage display
 
 
+def _run_login_action(action: LoginAction) -> None:
+    """Best-effort launcher; called only on a worker thread."""
+    script = None
+    directory = None
+    try:
+        if action.kind == "browser":
+            try:
+                subprocess.run(
+                    ["/usr/bin/open", "-a", "Google Chrome", *action.args],
+                    check=True,
+                    timeout=10,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except (OSError, subprocess.SubprocessError):
+                subprocess.run(
+                    ["/usr/bin/open", *action.args],
+                    check=True,
+                    timeout=10,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            return
+
+        # mkdtemp creates a private 0700 directory. A login shell gets the
+        # user's CLI PATH even when the menu bar was started by launchd.
+        directory = Path(tempfile.mkdtemp(prefix="llm-usage-login-"))
+        script = directory / "login.command"
+        script.write_text(
+            '#!/bin/zsh -l\n/bin/rm -f -- "$0"\n/bin/rmdir -- "${0:h}"\n'
+            f"exec {shlex.join(action.args)}\n",
+            encoding="utf-8",
+        )
+        script.chmod(0o700)
+        subprocess.run(
+            ["/usr/bin/open", "-a", "Terminal", str(script)],
+            check=True,
+            timeout=10,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        # Terminal reads asynchronously; the script removes itself once started.
+        script = directory = None
+    except Exception:
+        pass
+    finally:
+        try:
+            if script is not None:
+                script.unlink(missing_ok=True)
+            if directory is not None:
+                directory.rmdir()
+        except OSError:
+            pass
+
+
 def run_menubar() -> None:
     """Start the menu bar app (blocks). Requires rumps on macOS."""
     try:
@@ -463,6 +521,20 @@ def run_menubar() -> None:
     if not isinstance(auth_notified, dict):
         auth_notified = {}
 
+    def start_login(action: LoginAction) -> None:
+        try:
+            threading.Thread(target=_run_login_action, args=(action,), daemon=True).start()
+        except Exception:
+            pass  # even worker startup failure must not interrupt the menu
+
+    # Clicks reach this only when macOS routes them back to this process;
+    # unbundled installs may not, so the provider submenu offers the same action.
+    @rumps.notifications
+    def on_notification(info) -> None:
+        action = reauth_login_action(getattr(info, "data", None))
+        if action is not None:
+            start_login(action)
+
     def check_auth_notifications(report: AggregateReport) -> None:
         before = dict(auth_notified)
         for pid, short in reauth_notifications(report, auth_notified, now=time.time()):
@@ -471,6 +543,7 @@ def run_menubar() -> None:
                     title=f"{short} — 再ログインが必要です",
                     subtitle="llm-usage",
                     message="使用量を取得できません。該当サービスで再ログインしてください。",
+                    data={"provider": pid},
                 )
             except Exception:  # notifications are best effort
                 if pid in before:
@@ -646,6 +719,14 @@ def run_menubar() -> None:
                     if burn is not None and burn.hits_before_reset and burn.summary:
                         add_child(parent, burn.summary)
                 elif provider_issue_label(p):
+                    login = reauth_login_action({"provider": p.provider.value})
+                    if p.meta.get("reauth_required") and login is not None:
+                        # A row with a submenu ignores clicks, so this one has none.
+                        add_enabled(
+                            f"{short}    Sign-in required — クリックで再ログイン",
+                            lambda _=None, a=login: start_login(a),
+                        )
+                        continue
                     parent = add_enabled(f"{short}    {provider_issue_label(p)}")
                     for detail in (p.errors + p.notes)[:6]:
                         add_child(parent, detail[:240])
