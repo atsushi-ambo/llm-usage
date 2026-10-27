@@ -9,47 +9,12 @@ import pytest
 
 from llm_usage.config import Settings
 from llm_usage.models import AggregateReport, ProviderId, ProviderReport, SourceKind
-from llm_usage.menubar_core import (
-    LoginAction,
-    reauth_login_action,
-    reauth_notifications,
-    provider_issue_label,
-)
+from llm_usage.menubar_core import reauth_notifications, provider_issue_label
 from llm_usage.providers import claude, codex, xai
 from llm_usage.providers.base import ReauthenticationRequired
 from llm_usage.serialize import slim_report_for_menubar
 
 DAY = date(2026, 10, 26)
-
-
-@pytest.mark.parametrize(
-    ("pid", "expected"),
-    [
-        ("muse", LoginAction("browser", ("https://muse.ai/",))),
-        ("claude", LoginAction("terminal", ("claude", "auth", "login"))),
-        ("codex", LoginAction("terminal", ("codex", "login"))),
-        ("grok", LoginAction("terminal", ("grok", "login", "--oauth"))),
-    ],
-)
-def test_login_allowlist(pid, expected):
-    assert reauth_login_action({"provider": pid, "command": "untrusted"}) == expected
-
-
-@pytest.mark.parametrize(
-    "data",
-    [
-        None,
-        {},
-        "claude",
-        {"provider": None},
-        {"provider": []},
-        {"provider": "unknown"},
-        {"provider": "claude; touch /tmp/untrusted"},
-    ],
-)
-def test_login_allowlist_rejects_missing_or_unknown_data(data):
-    assert reauth_login_action(data) is None
-    assert reauth_login_action() is None
 
 
 def report(required=True, *, source=SourceKind.SUBSCRIPTION, **meta):
@@ -180,106 +145,3 @@ def test_unbundled_app_gets_notification_identity_without_files(monkeypatch):
     info["CFBundleIdentifier"] = "existing.bundle"
     assert _configure_notification_identity()
     assert info["CFBundleIdentifier"] == "existing.bundle"
-
-
-def test_auth_notification_carries_provider_and_click_starts_worker(monkeypatch):
-    import sys
-    from llm_usage import menubar
-
-    rumps = Mock()
-    rumps.notifications.side_effect = lambda callback: callback
-    monkeypatch.setitem(sys.modules, "rumps", rumps)
-    monkeypatch.setattr(menubar, "_configure_notification_identity", lambda: True)
-    monkeypatch.setattr(menubar, "_load_prefs", lambda: {})
-    monkeypatch.setattr(menubar, "_save_prefs", Mock())
-    monkeypatch.setattr(menubar, "_collect_menubar_report", lambda **kw: report())
-    monkeypatch.setattr(menubar.time, "sleep", Mock(side_effect=StopIteration))
-
-    def start_one_collection(*, target, daemon):
-        def start():
-            try:
-                target()
-            except StopIteration:
-                pass
-
-        return Mock(start=start)
-
-    monkeypatch.setattr(menubar.threading, "Thread", start_one_collection)
-    rumps.Timer.side_effect = lambda callback, interval: Mock(start=lambda: callback())
-    menubar.run_menubar()
-    rumps.notification.assert_called_once_with(
-        title="Claude — 再ログインが必要です",
-        subtitle="llm-usage",
-        message="使用量を取得できません。該当サービスで再ログインしてください。",
-        data={"provider": "claude"},
-    )
-
-    from types import SimpleNamespace
-
-    worker = Mock()
-    monkeypatch.setattr(menubar.threading, "Thread", worker)
-    callback = rumps.notifications.call_args.args[0]
-    callback(SimpleNamespace(data=None))  # quota notifications carry no data
-    callback(SimpleNamespace(data={"provider": "unknown"}))
-    worker.assert_not_called()
-    callback(SimpleNamespace(data={"provider": "claude"}))
-    worker.assert_called_once_with(
-        target=menubar._run_login_action,
-        args=(LoginAction("terminal", ("claude", "auth", "login")),),
-        daemon=True,
-    )
-    worker.return_value.start.assert_called_once()
-
-
-@pytest.mark.parametrize("pid", ["claude", "codex", "grok"])
-def test_terminal_login_uses_private_self_removing_command(monkeypatch, tmp_path, pid):
-    from pathlib import Path
-    from llm_usage import menubar
-
-    directory = tmp_path / "private"
-    directory.mkdir(mode=0o700)
-    monkeypatch.setattr(menubar.tempfile, "mkdtemp", lambda **kw: str(directory))
-    action = reauth_login_action({"provider": pid})
-
-    def open_terminal(argv, **kwargs):
-        assert argv[:3] == ["/usr/bin/open", "-a", "Terminal"]
-        script = Path(argv[3])
-        assert script.parent.stat().st_mode & 0o777 == 0o700
-        assert script.stat().st_mode & 0o777 == 0o700
-        text = script.read_text()
-        assert text.startswith("#!/bin/zsh -l\n")
-        assert '/bin/rm -f -- "$0"' in text
-        assert '/bin/rmdir -- "${0:h}"' in text
-        assert text.endswith(f"exec {' '.join(action.args)}\n")
-        assert "shell" not in kwargs
-        assert kwargs["timeout"] == 10
-
-    opener = Mock(side_effect=open_terminal)
-    monkeypatch.setattr(menubar.subprocess, "run", opener)
-    menubar._run_login_action(action)
-    opener.assert_called_once()
-    assert (directory / "login.command").exists()  # Terminal reads asynchronously
-
-
-def test_muse_login_falls_back_when_chrome_is_unavailable(monkeypatch):
-    import subprocess
-    from llm_usage import menubar
-
-    opener = Mock(side_effect=[subprocess.CalledProcessError(1, "open"), None])
-    monkeypatch.setattr(menubar.subprocess, "run", opener)
-    menubar._run_login_action(reauth_login_action({"provider": "muse"}))
-    assert [call.args[0] for call in opener.call_args_list] == [
-        ["/usr/bin/open", "-a", "Google Chrome", "https://muse.ai/"],
-        ["/usr/bin/open", "https://muse.ai/"],
-    ]
-
-
-def test_failed_terminal_open_is_nonfatal_and_cleans_up(monkeypatch, tmp_path):
-    from llm_usage import menubar
-
-    directory = tmp_path / "private"
-    directory.mkdir(mode=0o700)
-    monkeypatch.setattr(menubar.tempfile, "mkdtemp", lambda **kw: str(directory))
-    monkeypatch.setattr(menubar.subprocess, "run", Mock(side_effect=OSError("unavailable")))
-    menubar._run_login_action(reauth_login_action({"provider": "codex"}))
-    assert not directory.exists()

@@ -17,10 +17,8 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Mapping
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, TypedDict
+from typing import TypedDict
 
 from llm_usage.burnrate import BurnProjection, project_from_quota
 from llm_usage.models import AggregateReport, ProviderId, ProviderReport, SourceKind
@@ -33,28 +31,6 @@ NOTIFY_THRESHOLDS = (70, 90)
 
 # Default: Grok in the menu bar (user can switch)
 DEFAULT_FOCUS = "grok"
-
-
-@dataclass(frozen=True)
-class LoginAction:
-    kind: Literal["browser", "terminal"]
-    args: tuple[str, ...]
-
-
-def reauth_login_action(data: object = None) -> LoginAction | None:
-    """Resolve notification data using only fixed, trusted login actions."""
-    if not isinstance(data, Mapping):
-        return None
-    pid = data.get("provider")
-    if not isinstance(pid, str):
-        return None
-    return {
-        "muse": LoginAction("browser", ("https://muse.ai/",)),
-        "claude": LoginAction("terminal", ("claude", "auth", "login")),
-        "codex": LoginAction("terminal", ("codex", "login")),
-        "grok": LoginAction("terminal", ("grok", "login", "--oauth")),
-    }.get(pid)
-
 
 # Dashboard jewel tones, darkened so 13pt type and bars read on a light
 # NSMenu. Dark mode brightens ~22%. Same hues as the web UI.
@@ -164,6 +140,38 @@ def provider_issue_label(p: ProviderReport) -> str | None:
     if p.errors:
         return "Usage unavailable"
     return None
+
+
+# How to resolve "Sign-in required" per provider. Usage comes from each CLI's
+# stored credentials, so signing in on the website alone would not fix it —
+# CLI sources rerun their own login command. Commands are fixed constants and
+# never include report data.
+SIGNIN_ACTIONS: dict[str, tuple[str, str]] = {
+    "claude": ("terminal", "claude /login"),
+    "codex": ("terminal", "codex login"),
+    "grok": ("terminal", "grok login --oauth"),
+    "muse": ("url", "https://muse.ai"),
+}
+
+
+def signin_action(p: ProviderReport) -> tuple[str, str] | None:
+    """("terminal", command) or ("url", url) when `p` needs signing in again."""
+    if not p.meta.get("reauth_required"):
+        return None
+    return SIGNIN_ACTIONS.get(p.provider.value)
+
+
+def terminal_applescript(command: str) -> list[str]:
+    """osascript arguments that open Terminal and run a fixed login command."""
+    if command not in {cmd for kind, cmd in SIGNIN_ACTIONS.values() if kind == "terminal"}:
+        raise ValueError("unknown sign-in command")
+    return [
+        "osascript",
+        "-e", 'tell application "Terminal"',
+        "-e", "activate",
+        "-e", f'do script "{command}"',
+        "-e", "end tell",
+    ]
 
 
 def reauth_notifications(
