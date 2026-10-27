@@ -42,6 +42,9 @@ from llm_usage.menubar_core import (
     quota_of,
     provider_issue_label,
     reauth_notifications,
+    SIGNIN_ACTIONS,
+    signin_action,
+    terminal_applescript,
     save_prefs,
     title_quota_chip,
     title_quota_tooltip,
@@ -463,14 +466,44 @@ def run_menubar() -> None:
     if not isinstance(auth_notified, dict):
         auth_notified = {}
 
+    def start_signin(pid: str, action: tuple[str, str] | None) -> None:
+        """Open the provider's login flow. Runs on the main thread (menu or
+        notification click); launching is quick and non-blocking."""
+        if action is None:
+            return
+        kind, target = action
+        try:
+            if kind == "terminal":
+                subprocess.Popen(
+                    terminal_applescript(target),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            elif kind == "url":
+                webbrowser.open(target)
+        except (OSError, ValueError):
+            return
+
+    @rumps.notifications
+    def _on_notification(info) -> None:
+        pid = (info or {}).get("signin") if hasattr(info, "get") else None
+        if isinstance(pid, str):
+            start_signin(pid, SIGNIN_ACTIONS.get(pid))
+
     def check_auth_notifications(report: AggregateReport) -> None:
         before = dict(auth_notified)
         for pid, short in reauth_notifications(report, auth_notified, now=time.time()):
+            clickable = pid in SIGNIN_ACTIONS
             try:
                 rumps.notification(
                     title=f"{short} — 再ログインが必要です",
                     subtitle="llm-usage",
-                    message="使用量を取得できません。該当サービスで再ログインしてください。",
+                    message=(
+                        "クリックしてログイン画面を開きます。"
+                        if clickable
+                        else "使用量を取得できません。該当サービスで再ログインしてください。"
+                    ),
+                    data={"signin": pid} if clickable else None,
                 )
             except Exception:  # notifications are best effort
                 if pid in before:
@@ -646,7 +679,24 @@ def run_menubar() -> None:
                     if burn is not None and burn.hits_before_reset and burn.summary:
                         add_child(parent, burn.summary)
                 elif provider_issue_label(p):
-                    parent = add_enabled(f"{short}    {provider_issue_label(p)}")
+                    action = signin_action(p)
+                    if action is not None:
+                        def _signin_cb(_=None, _pid=p.provider.value, _action=action) -> None:
+                            start_signin(_pid, _action)
+
+                        parent = add_enabled(
+                            f"{short}    {provider_issue_label(p)} — click to sign in",
+                            _signin_cb,
+                        )
+                        sign_in = rumps.MenuItem(
+                            "Open login in Terminal…" if action[0] == "terminal"
+                            else "Open login page…"
+                        )
+                        sign_in.set_callback(_signin_cb)
+                        parent.add(sign_in)
+                        callbacks.append(sign_in)
+                    else:
+                        parent = add_enabled(f"{short}    {provider_issue_label(p)}")
                     for detail in (p.errors + p.notes)[:6]:
                         add_child(parent, detail[:240])
                 elif p.requests or p.total_tokens:

@@ -142,6 +142,38 @@ def provider_issue_label(p: ProviderReport) -> str | None:
     return None
 
 
+# How to resolve "Sign-in required" per provider. Usage comes from each CLI's
+# stored credentials, so signing in on the website alone would not fix it —
+# CLI sources rerun their own login command. Commands are fixed constants and
+# never include report data.
+SIGNIN_ACTIONS: dict[str, tuple[str, str]] = {
+    "claude": ("terminal", "claude /login"),
+    "codex": ("terminal", "codex login"),
+    "grok": ("terminal", "grok login"),
+    "muse": ("url", "https://muse.ai"),
+}
+
+
+def signin_action(p: ProviderReport) -> tuple[str, str] | None:
+    """("terminal", command) or ("url", url) when `p` needs signing in again."""
+    if not p.meta.get("reauth_required"):
+        return None
+    return SIGNIN_ACTIONS.get(p.provider.value)
+
+
+def terminal_applescript(command: str) -> list[str]:
+    """osascript arguments that open Terminal and run a fixed login command."""
+    if command not in {cmd for kind, cmd in SIGNIN_ACTIONS.values() if kind == "terminal"}:
+        raise ValueError("unknown sign-in command")
+    return [
+        "osascript",
+        "-e", 'tell application "Terminal"',
+        "-e", "activate",
+        "-e", f'do script "{command}"',
+        "-e", "end tell",
+    ]
+
+
 def reauth_notifications(
     report: AggregateReport, notified: dict, *, now: float,
 ) -> list[tuple[str, str]]:
